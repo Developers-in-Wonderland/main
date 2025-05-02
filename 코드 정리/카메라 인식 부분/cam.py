@@ -2,6 +2,7 @@ import cv2 # openCV 라이브러리 불러오기기
 
 # Haar Cascade 로드
 # 정면 얼굴과 측면 얼굴 인식을 위함
+# ++
 frontal_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 profile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
 
