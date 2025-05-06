@@ -1,0 +1,35 @@
+// 참고하시면 될 것 같습니다~!
+//시리얼 수신과 출력 예시
+// 참고만 하시고 그대로 사용하셔도 되고
+// 본인 코드에 맞게 자유롭게 설계해주세요
+void setup() {
+	Serial.begin(115200);
+  }
+  
+  void loop() {
+	if (Serial.available()) {
+	  String input = Serial.readStringUntil('\n');
+	  input.trim();
+	  int motor_vals[6];
+	  int idx = 0;
+  
+	  // 문자열 파싱: "10,-5,0,2,1,3" → motor_vals[0] ~ [5]
+	  char* token = strtok((char*)input.c_str(), ",");
+	  while (token != NULL && idx < 6) {
+		motor_vals[idx] = atoi(token);
+		token = strtok(NULL, ",");
+		idx++;
+	  }
+  
+	  // 디버깅 출력 (혹은 실제 모터 제어로 대체)
+	  for (int i = 0; i < 6; i++) {
+		Serial.print("Motor ");
+		Serial.print(i + 1);
+		Serial.print(": ");
+		Serial.println(motor_vals[i]);
+	  }
+  
+	  // TODO: 여기서 motor_vals[i]를 서보나 DC모터 제어에 반영
+	}
+  }
+  
