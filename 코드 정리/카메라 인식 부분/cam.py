@@ -1,4 +1,4 @@
-import cv2 # openCV 라이브러리 불러오기기
+import cv2 # openCV 라이브러리 불러오기
 
 # Haar Cascade 로드
 # 정면 얼굴과 측면 얼굴 인식을 위함
@@ -7,7 +7,9 @@ frontal_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fro
 profile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
 
 # 카메라 연결
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(0,cv2.CAP_DSHOW) #백엔드 중 Direct show만 쓰도록 함 -> 속도 향상
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)  # 카메라 해상도 낮춰 속도 개선
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 if not cap.isOpened():
     print("카메라를 열 수 없습니다.")
     exit()

@@ -41,7 +41,7 @@ profile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_pro
 # 얼굴 위치에 따른 모터 제어 각도 계산
 # 얼굴의 중심좌표, 넓이, 영상 크기를 입령 받아 로봇팔의 6개의 모터가
 # 어떻게 움직일지를 계산한다.
-def compute_motor_angles(center_x, center_y, area, frame_shape, desired_area=10000):
+def compute_motor_angles(center_x, center_y, area, frame_shape, desired_area=42000):
     frame_h, frame_w = frame_shape[:2]
     dx = center_x - (frame_w // 2)
     dy = center_y - (frame_h // 2)
@@ -74,7 +74,9 @@ serial_thread = threading.Thread(target=serial_worker, args=(q,), daemon=True)
 serial_thread.start()
 
 # 카메라 시작 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(0,cv2.CAP_DSHOW)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)  # 카메라 해상도 낮춰 속도 개선
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 if not cap.isOpened():
     print("카메라 열기 실패")
     exit()

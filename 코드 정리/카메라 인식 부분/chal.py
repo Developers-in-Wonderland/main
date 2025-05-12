@@ -38,7 +38,9 @@ def get_new_picture_filename(base_name="picture", ext="jpg"):
     return os.path.join(desktop_path, f"{base_name}_{next_number}.{ext}")
 
 # 카메라 연결
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(0,cv2.CAP_DSHOW)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)  # 카메라 해상도 낮춰 속도 개선
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 if not cap.isOpened():
     print("카메라 열기 실패")
     exit()
