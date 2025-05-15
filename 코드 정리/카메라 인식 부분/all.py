@@ -72,9 +72,7 @@ q = queue.Queue()
 serial_thread = threading.Thread(target=serial_worker, args=(q,), daemon=True)
 serial_thread.start()
 
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     print("카메라 열기 실패")
     exit()
@@ -172,10 +170,13 @@ while True:
         cx, cy = x + w // 2, y + h // 2
         area = w * h
 
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
-        cv2.putText(frame, f"({cx},{cy})", (cx - 50, cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-        cv2.putText(frame, f"Area: {area}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        print(f"[얼굴 추적] 중심 좌표: ({cx},{cy}) | 넓이: {area}")
+
+        if not recording and not photo_shooting:
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
+            cv2.putText(frame, f"({cx},{cy})", (cx - 50, cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            cv2.putText(frame, f"Area: {area}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
         angles = compute_motor_angles(cx, cy, area, frame.shape)
         clipped = clip_motor_angles(angles)
