@@ -52,7 +52,7 @@ def compute_motor_angles(center_x, center_y, area, frame_shape, desired_area=420
 	# 각 오차에 비례한 각도 변화량 / 오차가 클수록 세게 조정, 작아지면 천천히 조정정
     # 계수는 민감도 / 저장장
     return {
-        "motor_1": dx * 0.1,
+        "motor_1": dy * 0.1,
         "motor_2": dy * 0.1,
         "motor_3": dy * 0.05,
         "motor_4": dz * 0.0005,
