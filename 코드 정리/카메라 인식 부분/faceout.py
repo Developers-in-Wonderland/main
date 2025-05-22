@@ -60,11 +60,9 @@ def serial_worker(q, port='COM5', baud=115200):
     ser.close()
     print("시리얼 종료")
 
-# 얼굴 인식용 분류기
 frontal_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 profile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
 
-# 각도 및 딜레이 계산
 def compute_delay(dx, dy, min_delay=10, max_delay=20):
     distance = np.sqrt(dx**2 + dy**2)
     normalized = min(distance / 400, 1.0)
@@ -96,6 +94,23 @@ def compute_motor_angles(center_x, center_y, area, frame_shape, desired_area=500
 def clip_motor_angles(motor_cmds, limits=(-90, 90)):
     return {k: int(np.clip(v, limits[0], limits[1])) for k, v in motor_cmds.items()}
 
+def dynamic_alpha(dx, dy, base_alpha=0.7, max_alpha=0.95):
+    distance = np.sqrt(dx**2 + dy**2)
+    normalized = min(distance / 150, 1.0)
+    return base_alpha + (max_alpha - base_alpha) * (1 - normalized)
+
+def shift_frame_to_center(frame, cx, cy, alpha=0.8, prev_center=None):
+    frame_h, frame_w = frame.shape[:2]
+    target_x, target_y = frame_w // 2, frame_h // 2
+    if prev_center is not None:
+        cx = int(alpha * prev_center[0] + (1 - alpha) * cx)
+        cy = int(alpha * prev_center[1] + (1 - alpha) * cy)
+    dx = target_x - cx
+    dy = target_y - cy
+    M = np.float32([[1, 0, dx], [0, 1, dy]])
+    shifted = cv2.warpAffine(frame, M, (frame_w, frame_h))
+    return shifted, (cx, cy)
+
 q = queue.Queue()
 serial_thread = threading.Thread(target=serial_worker, args=(q,), daemon=True)
 serial_thread.start()
@@ -109,7 +124,6 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_FPS, 30)
 
 prev_cx, prev_cy = None, None
-alpha = 0.8
 recording = False
 out = None
 fourcc = cv2.VideoWriter_fourcc(*'MJPG')
@@ -207,18 +221,13 @@ while True:
         cx, cy = x + w // 2, y + h // 2
         area = w * h
 
-        if prev_cx is not None and prev_cy is not None:
-            cx = int(alpha * prev_cx + (1 - alpha) * cx)
-            cy = int(alpha * prev_cy + (1 - alpha) * cy)
-        prev_cx, prev_cy = cx, cy
+        dx = cx - (frame.shape[1] // 2)
+        dy = cy - (frame.shape[0] // 2)
+        alpha = dynamic_alpha(dx, dy)
+        frame, new_center = shift_frame_to_center(frame, cx, cy, alpha, (prev_cx, prev_cy))
+        prev_cx, prev_cy = new_center
 
-        print(f"[얼굴 추적] 중심 좌표: ({cx},{cy}) | 넓이: {area}")
-
-        if not recording and not photo_shooting:
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
-            cv2.putText(frame, f"({cx},{cy})", (cx - 50, cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-            cv2.putText(frame, f"Area: {area}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        print(f"[얼굴 추적] 중심 좌표: ({cx},{cy}) | 넓이: {area} | alpha: {round(alpha,2)}")
 
         angles = compute_motor_angles(cx, cy, area, frame.shape)
         clipped = clip_motor_angles(angles)
