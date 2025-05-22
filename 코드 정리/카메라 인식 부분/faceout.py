@@ -13,7 +13,7 @@ desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
 move_ready = threading.Event()
 move_ready.set()
 
-# 파일 이름 자동 생성 함수들
+# 영상 파일 자동 이름 생성
 def get_new_filename(base_name="output", ext="avi"):
     existing_files = os.listdir(desktop_path)
     pattern = re.compile(rf"{re.escape(base_name)}_(\d+)\.{re.escape(ext)}")
@@ -21,6 +21,7 @@ def get_new_filename(base_name="output", ext="avi"):
     next_number = max(numbers, default=0) + 1
     return os.path.join(desktop_path, f"{base_name}_{next_number}.{ext}")
 
+# 사진 파일 자동 이름 생성
 def get_new_picture_filename(base_name="picture", ext="jpg"):
     existing_files = os.listdir(desktop_path)
     pattern = re.compile(rf"{re.escape(base_name)}_(\d+)\.{re.escape(ext)}")
@@ -28,7 +29,7 @@ def get_new_picture_filename(base_name="picture", ext="jpg"):
     next_number = max(numbers, default=0) + 1
     return os.path.join(desktop_path, f"{base_name}_{next_number}.{ext}")
 
-# 시리얼 전송 스레드
+############ 시리얼 전송 스레드 ###############
 def serial_worker(q, port='COM5', baud=115200):
     try:
         ser = serial.Serial(port, baud, timeout=1)
@@ -54,6 +55,7 @@ def serial_worker(q, port='COM5', baud=115200):
         print(f"[Serial] Sent: {message.strip()}")
 
         delay_ms = motor_cmds["motor_7"]
+
         move_ready.clear()
         time.sleep(delay_ms / 1000.0)
         move_ready.set()
@@ -69,47 +71,46 @@ def compute_delay(dx, dy, min_delay=10, max_delay=20):
     delay = int(max_delay - (max_delay - min_delay) * normalized)
     return delay
 
-def compute_motor_angles(center_x, center_y, area, frame_shape, desired_area=50000):
+def compute_motor_angles(center_x, center_y, area, frame_shape, desired_area=30000):
     frame_h, frame_w = frame_shape[:2]
     dx = center_x - (frame_w // 2)
     dy = center_y - (frame_h // 2)
     dz = desired_area - area
 
     ddx = 0 if abs(dx) <= 50 else (-1 if dx > 0 else 1)
-    ddy = 0 if abs(dy) <= 80 else (-1 if dy > 0 else 1)
-    ddz = 0 if abs(dz) <= 3000 else (1 if dz > 0 else -1)
-    ddz = 0
+    ddy = 0 if abs(dy) <= 50 else (-1 if dy > 0 else 1)
+    ddz = 0 if abs(dz) <= 10000 else (1 if dz > 0 else -1)
 
     delay = compute_delay(dx, dy)
+
+    ddx = 0
+    ddy = 0
+
     return {
-        "motor_1": ddx,
-        "motor_2": -ddy,
-        "motor_3": 2 * ddy,
-        "motor_4": -ddy + ddz,
-        "motor_5": -(2 * ddz),
-        "motor_6": ddz,
+        "motor_1": 0.5 * ddx,
+        "motor_2": -0.5 * ddy,
+        "motor_3": ddy,
+        "motor_4": -0.5 * ddy + 0.5 * ddz,
+        "motor_5": -ddz,
+        "motor_6": 0.5 * ddz,
         "motor_7": delay
     }
 
+motor_freeze_time = {"x": 0, "y": 0, "z": 0}
+
+def should_freeze(axis, now):
+    return now - motor_freeze_time[axis] < 0.7
+
+def update_freeze_timer(ddx, ddy, ddz, now):
+    if ddx == 0:
+        motor_freeze_time["x"] = now
+    if ddy == 0:
+        motor_freeze_time["y"] = now
+    if ddz == 0:
+        motor_freeze_time["z"] = now
+
 def clip_motor_angles(motor_cmds, limits=(-90, 90)):
     return {k: int(np.clip(v, limits[0], limits[1])) for k, v in motor_cmds.items()}
-
-def dynamic_alpha(dx, dy, base_alpha=0.7, max_alpha=0.95):
-    distance = np.sqrt(dx**2 + dy**2)
-    normalized = min(distance / 150, 1.0)
-    return base_alpha + (max_alpha - base_alpha) * (1 - normalized)
-
-def shift_frame_to_center(frame, cx, cy, alpha=0.8, prev_center=None):
-    frame_h, frame_w = frame.shape[:2]
-    target_x, target_y = frame_w // 2, frame_h // 2
-    if prev_center is not None:
-        cx = int(alpha * prev_center[0] + (1 - alpha) * cx)
-        cy = int(alpha * prev_center[1] + (1 - alpha) * cy)
-    dx = target_x - cx
-    dy = target_y - cy
-    M = np.float32([[1, 0, dx], [0, 1, dy]])
-    shifted = cv2.warpAffine(frame, M, (frame_w, frame_h))
-    return shifted, (cx, cy)
 
 q = queue.Queue()
 serial_thread = threading.Thread(target=serial_worker, args=(q,), daemon=True)
@@ -119,11 +120,11 @@ cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
 if not cap.isOpened():
     print("카메라 열기 실패")
     exit()
+
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_FPS, 30)
 
-prev_cx, prev_cy = None, None
 recording = False
 out = None
 fourcc = cv2.VideoWriter_fourcc(*'MJPG')
@@ -133,9 +134,15 @@ photo_taken = 0
 photo_interval = 5
 countdown_start_time = 0
 
-last_cmd = None
-no_face_frames = 0
-max_no_face_frames = 30
+last_face_info = {
+    "cx": None,
+    "cy": None,
+    "area": None,
+    "dx": 0,
+    "dy": 0,
+    "dz": 0,
+    "frames_since_lost": 0
+}
 
 print("실행 중: 's'=녹화 시작, 'e'=녹화 종료, 숫자=연속 사진촬영, 'q'=종료")
 
@@ -166,8 +173,7 @@ while True:
 
     if recording:
         out.write(frame)
-        cv2.putText(frame, "Recording...", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        cv2.putText(frame, "Recording...", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
     if ord('0') < key <= ord('9') and not photo_shooting:
         photo_count = key - ord('0')
@@ -182,15 +188,12 @@ while True:
         clean_frame = frame.copy()
 
         if seconds_left > 0:
-            cv2.putText(frame, f"{seconds_left}", (30, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 3)
+            cv2.putText(frame, f"{seconds_left}", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 3)
         elif seconds_left == 0 and elapsed < photo_interval + 1:
-            cv2.putText(frame, "Cheese~!", (30, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 3)
+            cv2.putText(frame, "Cheese~!", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 3)
 
         shots_left = photo_count - photo_taken
-        cv2.putText(frame, f"{shots_left}", (frame.shape[1] - 60, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 0, 255), 3)
+        cv2.putText(frame, f"{shots_left}", (frame.shape[1] - 60, 60), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 0, 255), 3)
 
         if elapsed >= photo_interval:
             filename = get_new_picture_filename()
@@ -221,27 +224,48 @@ while True:
         cx, cy = x + w // 2, y + h // 2
         area = w * h
 
-        dx = cx - (frame.shape[1] // 2)
-        dy = cy - (frame.shape[0] // 2)
-        alpha = dynamic_alpha(dx, dy)
-        frame, new_center = shift_frame_to_center(frame, cx, cy, alpha, (prev_cx, prev_cy))
-        prev_cx, prev_cy = new_center
+        print(f"[얼굴 추적] 중심 좌표: ({cx},{cy}) | 넓이: {area}")
 
-        print(f"[얼굴 추적] 중심 좌표: ({cx},{cy}) | 넓이: {area} | alpha: {round(alpha,2)}")
+        if not recording and not photo_shooting:
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
+            cv2.putText(frame, f"({cx},{cy})", (cx - 50, cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            cv2.putText(frame, f"Area: {area}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
         angles = compute_motor_angles(cx, cy, area, frame.shape)
+        now = time.time()
+
+        ddx = angles["motor_1"]
+        ddy = -angles["motor_2"]
+        ddz = angles["motor_6"]
+
+        update_freeze_timer(ddx, ddy, ddz, now)
+
+        last_face_info.update({"cx": cx, "cy": cy, "area": area, "dx": ddx, "dy": ddy, "dz": ddz, "frames_since_lost": 0})
+
+        if should_freeze("x", now): angles["motor_1"] = 0
+        if should_freeze("y", now): angles["motor_2"] = 0; angles["motor_3"] = 0; angles["motor_4"] = 0 if should_freeze("z", now) else angles["motor_6"]
+        if should_freeze("z", now): angles["motor_4"] = 0 if should_freeze("z", now) else angles["motor_2"]; angles["motor_5"] = 0; angles["motor_6"] = 0
+
         clipped = clip_motor_angles(angles)
         q.put(clipped)
-        last_cmd = clipped
-        no_face_frames = 0
     else:
         print("얼굴 없음")
-        no_face_frames += 1
-        if last_cmd and no_face_frames <= max_no_face_frames:
-            print("→ 예측 이동 실행 중")
-            q.put(last_cmd)
-        elif no_face_frames > max_no_face_frames:
-            print("→ 예측 기간 종료, 정지")
+        last_face_info["frames_since_lost"] += 1
+
+        if last_face_info["frames_since_lost"] <= 5 and move_ready.is_set():
+            print(f"[예측 추적] 이전 방향으로 계속 이동 중... {last_face_info['frames_since_lost']} 프레임째")
+            angles = {
+                "motor_1": 0.5 * last_face_info["dx"],
+                "motor_2": -0.5 * last_face_info["dy"],
+                "motor_3": last_face_info["dy"],
+                "motor_4": -0.5 * last_face_info["dy"] + 0.5 * last_face_info["dz"],
+                "motor_5": -last_face_info["dz"],
+                "motor_6": 0.5 * last_face_info["dz"],
+                "motor_7": 15
+            }
+            clipped = clip_motor_angles(angles)
+            q.put(clipped)
 
     cv2.imshow('Live Camera', frame)
     if key == ord('q'):
