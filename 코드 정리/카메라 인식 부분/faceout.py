@@ -135,9 +135,9 @@ photo_interval = 5
 countdown_start_time = 0
 
 last_face_info = {
-    "cx": None,
-    "cy": None,
-    "area": None,
+    "cx": 320,
+    "cy": 240,
+    "area": 30000,
     "dx": 0,
     "dy": 0,
     "dz": 0,
@@ -154,58 +154,6 @@ while True:
 
     now = time.time()
     key = cv2.waitKey(1) & 0xFF
-
-    if key == ord('e') and recording:
-        print("녹화 종료! 영상이 저장되었습니다.")
-        recording = False
-        out.release()
-        out = None
-
-    if key == ord('s') and not recording and not photo_shooting:
-        output_path = get_new_filename()
-        print(f"녹화 시작! 저장 파일명: {os.path.basename(output_path)}")
-        height, width = frame.shape[:2]
-        out = cv2.VideoWriter(output_path, fourcc, 20.0, (width, height))
-        if not out.isOpened():
-            print("VideoWriter 열기 실패")
-            break
-        recording = True
-
-    if recording:
-        out.write(frame)
-        cv2.putText(frame, "Recording...", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-
-    if ord('0') < key <= ord('9') and not photo_shooting:
-        photo_count = key - ord('0')
-        photo_taken = 0
-        countdown_start_time = now
-        photo_shooting = True
-        print(f"{photo_count}장의 사진 연속 촬영 시작!")
-
-    if photo_shooting:
-        elapsed = now - countdown_start_time
-        seconds_left = photo_interval - int(elapsed)
-        clean_frame = frame.copy()
-
-        if seconds_left > 0:
-            cv2.putText(frame, f"{seconds_left}", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 3)
-        elif seconds_left == 0 and elapsed < photo_interval + 1:
-            cv2.putText(frame, "Cheese~!", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 3)
-
-        shots_left = photo_count - photo_taken
-        cv2.putText(frame, f"{shots_left}", (frame.shape[1] - 60, 60), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 0, 255), 3)
-
-        if elapsed >= photo_interval:
-            filename = get_new_picture_filename()
-            cv2.imwrite(filename, clean_frame)
-            photo_taken += 1
-            print(f"{photo_taken}번째 저장됨: {os.path.basename(filename)}")
-
-            if photo_taken >= photo_count:
-                photo_shooting = False
-                print("연속 사진 촬영 완료!")
-            else:
-                countdown_start_time = now
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces_frontal = frontal_cascade.detectMultiScale(gray, 1.1, 8, minSize=(60, 60))
@@ -254,7 +202,14 @@ while True:
         last_face_info["frames_since_lost"] += 1
 
         if last_face_info["frames_since_lost"] <= 5 and move_ready.is_set():
-            print(f"[예측 추적] 이전 방향으로 계속 이동 중... {last_face_info['frames_since_lost']} 프레임째")
+            last_face_info["cx"] += int(10 * last_face_info["dx"])
+            last_face_info["cy"] += int(10 * last_face_info["dy"])
+
+            predicted_text = f"예측 좌표: ({last_face_info['cx']},{last_face_info['cy']})"
+            cv2.putText(frame, predicted_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+            print(f"[예측 추적] 로봇팔이 이전 방향으로 계속 이동 중... {last_face_info['frames_since_lost']} 프레임째 → {predicted_text}")
+
             angles = {
                 "motor_1": 0.5 * last_face_info["dx"],
                 "motor_2": -0.5 * last_face_info["dy"],
