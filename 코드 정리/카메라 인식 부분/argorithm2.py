@@ -72,7 +72,7 @@ def compute_delay(dx, dy, min_delay=10, max_delay=20):
     delay = int(max_delay - (max_delay - min_delay) * normalized)
     return delay  # ms 단위 정수로 반환
 
-def compute_motor_angles(center_x, center_y, area, frame_shape, desired_area=50000):
+def compute_motor_angles(center_x, center_y, area, frame_shape, desired_area=30000):
     frame_h, frame_w = frame_shape[:2]
     dx = center_x - (frame_w // 2)
     dy = center_y - (frame_h // 2)
@@ -81,22 +81,40 @@ def compute_motor_angles(center_x, center_y, area, frame_shape, desired_area=500
     # dz = 거리를 넓이(area)로 추정한 오차이다.
     
     ddx = 0 if abs(dx) <= 50 else (-1 if dx > 0 else 1)
-    ddy = 0 if abs(dy) <= 80 else (-1 if dy > 0 else 1)
-    ddz = 0 if abs(dz) <= 3000 else (1 if dz > 0 else -1)
-    
-    ddz = 0
-    
+    ddy = 0 if abs(dy) <= 50 else (-1 if dy > 0 else 1)
+    ddz = 0 if abs(dz) <= 10000 else (1 if dz > 0 else -1)
+
     delay = compute_delay(dx, dy)
     
+    ddx = 0
+    ddy = 0
+
     return {
-        "motor_1": ddx,
-        "motor_2": -ddy,
-        "motor_3": 2 * ddy,
-        "motor_4": -ddy + ddz,
-        "motor_5": -(2 * ddz),
-        "motor_6": ddz,
+        "motor_1": 0.5 * ddx,
+        "motor_2": -0.5 * ddy,
+        "motor_3": ddy,
+        "motor_4": -0.5 * ddy + 0.5 * ddz,
+        "motor_5": -ddz,
+        "motor_6": 0.5 * ddz,
         "motor_7": delay
     }
+
+motor_freeze_time = {
+    "x": 0,
+    "y": 0,
+    "z": 0,
+}
+
+def should_freeze(axis, now):
+    return now - motor_freeze_time[axis] < 0.7
+
+def update_freeze_timer(ddx, ddy, ddz, now):
+    if ddx == 0:
+        motor_freeze_time["x"] = now
+    if ddy == 0:
+        motor_freeze_time["y"] = now
+    if ddz == 0:
+        motor_freeze_time["z"] = now
 
 def clip_motor_angles(motor_cmds, limits=(-90, 90)):
     return {k: int(np.clip(v, limits[0], limits[1])) for k, v in motor_cmds.items()}
@@ -113,9 +131,6 @@ if not cap.isOpened():
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_FPS, 30)
-    
-prev_cx, prev_cy = None, None  # 이전 중심 좌표 저장용
-alpha = 0.8  # 보간 비율 (0 ~ 1 사이. 클수록 더 부드러움)
 
 recording = False
 out = None
@@ -209,12 +224,6 @@ while True:
         x, y, w, h = all_faces[0]
         cx, cy = x + w // 2, y + h // 2
         area = w * h
-        
-        # 이전 좌표와 보간
-        if prev_cx is not None and prev_cy is not None:
-            cx = int(alpha * prev_cx + (1 - alpha) * cx)
-            cy = int(alpha * prev_cy + (1 - alpha) * cy)
-        prev_cx, prev_cy = cx, cy
 
         print(f"[얼굴 추적] 중심 좌표: ({cx},{cy}) | 넓이: {area}")
 
@@ -225,6 +234,25 @@ while True:
             cv2.putText(frame, f"Area: {area}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
         angles = compute_motor_angles(cx, cy, area, frame.shape)
+        now = time.time()
+
+        ddx = angles["motor_1"]
+        ddy = -angles["motor_2"]
+        ddz = angles["motor_6"]
+
+        update_freeze_timer(ddx, ddy, ddz, now)
+
+        if should_freeze("x", now):
+            angles["motor_1"] = 0
+        if should_freeze("y", now):
+            angles["motor_2"] = 0
+            angles["motor_3"] = 0
+            angles["motor_4"] = 0 if should_freeze("z", now) == True else angles["motor_6"]
+        if should_freeze("z", now):
+            angles["motor_4"] = 0 if should_freeze("z", now) == True else angles["motor_2"]
+            angles["motor_5"] = 0
+            angles["motor_6"] = 0
+
         clipped = clip_motor_angles(angles)
         q.put(clipped)
     else:
