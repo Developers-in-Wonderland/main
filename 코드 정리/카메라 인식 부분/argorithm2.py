@@ -66,7 +66,7 @@ def serial_worker(q, port='COM5', baud=115200):
 frontal_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 profile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
 
-def compute_delay(dx, dy, min_delay=10, max_delay=20):
+def compute_delay(dx, dy, min_delay=20, max_delay=30):
     distance = np.sqrt(dx**2 + dy**2)
     normalized = min(distance / 400, 1.0)  # 0~400 → 0.0~1.0
     delay = int(max_delay - (max_delay - min_delay) * normalized)
@@ -85,20 +85,19 @@ def compute_motor_angles(center_x, center_y, area, frame_shape, desired_area=300
     ddz = 0 if abs(dz) <= 10000 else (1 if dz > 0 else -1)
 
     delay = compute_delay(dx, dy)
-    
-    ddx = 0
-    ddy = 0
+
 
     return {
-        "motor_1": 0.5 * ddx,
+        "motor_1": ddx,
         "motor_2": -0.5 * ddy,
         "motor_3": ddy,
-        "motor_4": -0.5 * ddy + 0.5 * ddz,
-        "motor_5": -ddz,
-        "motor_6": 0.5 * ddz,
+        "motor_4": -0.5 * ddy + 3 * ddz,
+        "motor_5": -3 * ddz,
+        "motor_6": 2 * ddz,
         "motor_7": delay
     }
 
+    
 motor_freeze_time = {
     "x": 0,
     "y": 0,
