@@ -2,7 +2,7 @@
 #include <Adafruit_PWMServoDriver.h>
 
 int motor_vals[7] = { 0 };
-int curr_degree[6] = {90, 40, 95, 87, 90, 62};
+int curr_degree[6] = {90, 40, 95, 85, 90, 55};
 
 // ----- 서보 관련 상수 정의 -----
 #define SERVOMIN 102
@@ -24,9 +24,9 @@ void checklimit() {
     curr_degree[0] = constrain(curr_degree[0], 0, 180);
     curr_degree[1] = constrain(curr_degree[1], 0, 90);
     curr_degree[2] = constrain(curr_degree[2], 30, 180);
-    curr_degree[3] = constrain(curr_degree[3], 30, 150);
-    curr_degree[4] = constrain(curr_degree[4], 30, 180);
-    curr_degree[5] = constrain(curr_degree[5], 0, 120);
+    curr_degree[3] = constrain(curr_degree[3], 40, 120);
+    curr_degree[4] = constrain(curr_degree[4], 40, 150);
+    curr_degree[5] = constrain(curr_degree[5], 30, 90);
 }
 
 void setServoAngle(int pinNum) {
@@ -37,7 +37,8 @@ void setServoAngle(int pinNum) {
 void moving() { // 해당 방향으로 1도 움직임
 
     for (int i = 0; i < 6; i++) {
-        curr_degree[i] += motor_vals[i];
+        curr_degree[i] += motor_vals[i];  
+        checklimit();
         curr_degree[i] = constrain(curr_degree[i], DEGREE_MIN, DEGREE_MAX);
         setServoAngle(i);
     }
@@ -63,6 +64,30 @@ void moveArm() {
 }
 
 void test() {
+
+    for (int i = 0; i < 45; i++) {
+        curr_degree[3] += 1;
+        curr_degree[4] -= 2;
+        curr_degree[5] += 1;
+
+        for (int i = 0; i < 6; i++) {
+            curr_degree[i] = constrain(curr_degree[i], DEGREE_MIN, DEGREE_MAX);
+            setServoAngle(i);
+        }
+        delay(30);
+    }
+
+    for (int i = 0; i < 45; i++) {
+        curr_degree[3] -= 1;
+        curr_degree[4] += 2;
+        curr_degree[5] -= 1;
+
+        for (int i = 0; i < 6; i++) {
+            curr_degree[i] = constrain(curr_degree[i], DEGREE_MIN, DEGREE_MAX);
+            setServoAngle(i);
+        }
+        delay(30);
+    }
 
 }
 
