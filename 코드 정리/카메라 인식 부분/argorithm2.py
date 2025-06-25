@@ -122,7 +122,7 @@ q = queue.Queue()
 serial_thread = threading.Thread(target=serial_worker, args=(q,), daemon=True)
 serial_thread.start()
 
-cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     print("카메라 열기 실패")
     exit()
