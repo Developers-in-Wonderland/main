@@ -7,6 +7,8 @@ import os
 import re
 import time
 
+# DNN 기본 코드 (흔들림 보정 x), 로봇팔 연결도 안해놓음 하려면 COM3 -> COM5로 바꾸기
+
 # ====== 저장 경로 (바탕화면) ======
 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
 
@@ -31,7 +33,7 @@ def draw_text(img, text, org, font_scale=0.8, thickness=2):
     cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0,0,0), thickness, cv2.LINE_AA)
 
 ############ 시리얼 전송 스레드 ############
-def serial_worker(q, port='COM3', baud=115200):
+def serial_worker(q, port='COM5', baud=115200):
     try:
         ser = serial.Serial(port, baud, timeout=1)
         time.sleep(2)  # 아두이노 리셋 대기
@@ -96,9 +98,10 @@ serial_thread = threading.Thread(target=serial_worker, args=(q,), daemon=True)
 serial_thread.start()
 
 # ====== 카메라 ======
-cap = cv2.VideoCapture(0)  # 노트북 카메라
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+  # 노트북 카메라
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 if not cap.isOpened():
     print("카메라 열기 실패")
     q.put(None)
