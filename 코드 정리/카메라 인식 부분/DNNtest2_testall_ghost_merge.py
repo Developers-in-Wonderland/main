@@ -81,15 +81,18 @@ stab_buf = deque()              # (t, dist)
 metric2_ratios = []
 
 # [지표3] ICR3 (정지 구간 원내 비율)
-STOP_SPEED_THR = 2.0            # px/s 이하면 정지 간주
+STOP_SPEED_THR = 10.0            # px/s 이하면 정지 간주
+STOP_HOLD_START= 0.5
 STOP_HOLD_SEC  = 3.0            # 정지 유지 구간
 icr3_phase = "idle"             # 'idle' | 'collect'
 icr3_center = None              # (cx, cy)
 icr3_t0 = 0.0
 icr3_inside = 0
 icr3_total  = 0
-ICR_RADIUS = 8.0                # 원 반경(px) — 필요시 조정
+ICR_RATIO = 0.03                # 원 반경 Spec (3%니까 0.03)
+ICR_RADIUS = 0.0                # 원 반경(px) — ㅁ티에서 계산
 metric3_ratios = []
+matric3_text = ""
 
 _prev_cx, _prev_cy = None, None
 _prev_t = None
@@ -110,10 +113,10 @@ def est_speed_px_per_s(cx, cy, prev_cx, prev_cy, dt):
     if prev_cx is None or dt <= 0:
         return 0.0
     dx = float(cx - prev_cx)
-    if dx<2 :
+    if dx<5 :
         dx = 0
     dy = float(cy - prev_cy)
-    if dy<2 :
+    if dy<5 :
         dy = 0
 
     return (dx*dx + dy*dy) ** 0.5 / max(dt, 1e-6)
@@ -154,7 +157,7 @@ class CaptureThread:
         if not self.cap.isOpened(): raise RuntimeError("카메라 열기 실패")
         try: self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
         except: pass
-        try: self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+        try: self.cap.set(cv2.CAP_PROP_AUTO_WB, 1)
         except: pass
         try: self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
         except: pass
@@ -340,6 +343,8 @@ def main():
     msg_rt_text, msg_rt_until = "", 0.0
     msg_rt_display = False
 
+    face_boxes_preFrame = []
+
     print("키: s/e=녹화 시작/종료, 1~9=연속촬영(장수), q=종료")
     try:
         frame_idx = 0
@@ -349,6 +354,8 @@ def main():
 
         box_l=box_t=box_w=box_h=box_cx=box_cy=0
         pre_frame_time = 0
+        ICR_RADIUS = 0.0
+
         while True:
             ok, frame = cap_thread.read()
             if not ok: continue
@@ -367,9 +374,9 @@ def main():
             frame = cv2.flip(frame,1)
             frame_h, frame_w = frame.shape[:2]
 
-            if False:#if box_l==0:
-                box_l=frame_w/2; box_t=frame_h/2
-                box_w=box_h=0; box_cx=frame_w/2; box_cy=frame_h/2
+            #지표3 spec Setting
+            if ICR_RADIUS<= 0 :
+                ICR_RADIUS = int( ((((frame_w/2)**2) + ((frame_h/2))**2)**0.5) * ICR_RATIO )
 
             frame_idx += 1
             do_detect = (frame_idx % DETECT_EVERY == 0)
@@ -377,7 +384,13 @@ def main():
             dt_kf = max(1e-3, now - last_kf_ts); last_kf_ts = now
 
             # 얼굴 검출
-            face_boxes = detect_faces_dnn(frame) if do_detect else []
+            if do_detect:
+                face_boxes = detect_faces_dnn(frame)
+                face_boxes_preFrame = face_boxes  
+            else:
+                face_boxes = face_boxes_preFrame
+                #face_boxes = []
+
             face_found = len(face_boxes) > 0
 
             # --- 지표1: 재인식 시간 측정(미검출→검출 전환) ---
@@ -405,18 +418,25 @@ def main():
             else:
                 if kalman_inited: kpx, kpy = kalman_predict(kf, dt_kf)
                 else:             kpx, kpy = (frame_w//2, frame_h//2)
-
-            #disp_cx=use_cx=box_cx
-            #disp_cy=use_cy=box_cy
+            
             # 중앙 고정 목표
             use_cx, use_cy = kpx, kpy
             if kalman_inited:
                 use_cx += int(kf.statePost[2,0] * LEAD_FACE_SEC)
                 use_cy += int(kf.statePost[3,0] * LEAD_FACE_SEC)
+            
+            ##-----------------------------------------------------------------
+            # 로봇팔 제어가 여기 들어가야함...
 
+            ##-----------------------------------------------------------------
             # 화면 표시용 스무딩
-            disp_cx = int(cx_oe.filter(use_cx, now))
-            disp_cy = int(cy_oe.filter(use_cy, now))
+            disp_kf_cx = int(cx_oe.filter(use_cx, now))
+            disp_kf_cy = int(cy_oe.filter(use_cy, now))
+            disp_ori_cx = box_cx
+            disp_ori_cy = box_cy
+
+            #disp_kf_cx=use_cx=box_cx
+            #disp_kf_cy=use_cy=box_cy
 
             # --- 줌 목표 --- 
             #if face_found and box_h > 0:
@@ -427,8 +447,8 @@ def main():
             #z_now = zoom_smooth.update(z_desired, now, slew_per_s=ZOOM_SLEW_PER_S)
 
             # --- 중앙 평행이동 + 크롭 ---
-            diff_x = (frame_w/2)-disp_cx
-            diff_y = (frame_h/2)-disp_cy
+            diff_x = (frame_w/2)-disp_kf_cx
+            diff_y = (frame_h/2)-disp_kf_cy
             min_x = -(frame_w*RATIO_TRANSLATE/2); max_x = frame_w*RATIO_TRANSLATE/2
             min_y = -(frame_h*RATIO_TRANSLATE/2); max_y = frame_h*RATIO_TRANSLATE/2
             fx = float(np.clip(diff_x, min_x, max_x))
@@ -436,17 +456,22 @@ def main():
 
             display_w = int(frame_w * (1-RATIO_TRANSLATE))
             display_h = int(frame_h * (1-RATIO_TRANSLATE))
-            crop_t = int(disp_cy-(display_h/2)); crop_b = int(disp_cy+(display_h/2))
-            crop_l = int(disp_cx-(display_w/2)); crop_r = int(disp_cx+(display_w/2))
+            crop_t = int(disp_kf_cy-(display_h/2)); crop_b = int(disp_kf_cy+(display_h/2))
+            crop_l = int(disp_kf_cx-(display_w/2)); crop_r = int(disp_kf_cx+(display_w/2))
             if crop_t < 0: crop_t = 0; crop_b = crop_t + display_h
             elif crop_b >= frame_h-1: crop_b = frame_h-1; crop_t = crop_b-display_h
             if crop_l < 0: crop_l = 0; crop_r = crop_l + display_w
             elif crop_r >= frame_w-1: crop_r = frame_w-1; crop_l = crop_r-display_w
             
             shifted = frame[int(crop_t):int(crop_b), int(crop_l):int(crop_r)]
+            #shifted = frame[int(frame_h*RATIO_TRANSLATE/2):int(frame_h*RATIO_TRANSLATE/2 + display_h), int(frame_w*RATIO_TRANSLATE/2):int(frame_w*RATIO_TRANSLATE/2 + display_w)]
+            #임시로 보정 안한거 저장용
+            #croped = frame[int(frame_h*RATIO_TRANSLATE/2):int(frame_h*RATIO_TRANSLATE/2 + display_h), int(frame_w*RATIO_TRANSLATE/2):int(frame_w*RATIO_TRANSLATE/2 + display_w)]
             
-            disp_addapt_size_cx = disp_cx - crop_l
-            disp_addapt_size_cy = disp_cy - crop_t
+            disp_addapt_size_kf_cx = disp_kf_cx - crop_l
+            disp_addapt_size_kf_cy = disp_kf_cy - crop_t
+            disp_addapt_size_ori_cx = disp_ori_cx - crop_l
+            disp_addapt_size_ori_cy = disp_ori_cy - crop_t
             
             out_frame = shifted
 
@@ -455,29 +480,30 @@ def main():
 
             # 가이드 박스 + 센터 점
             guide_w = box_w; guide_h = box_h
-            gx1 = int(disp_addapt_size_cx - (guide_w/2))
+            gx1 = int(disp_addapt_size_ori_cx - (guide_w/2))
             gx2 = int(gx1+guide_w)
-            gy1 = int(disp_addapt_size_cy - (guide_h/2))
+            gy1 = int(disp_addapt_size_ori_cy - (guide_h/2))
             gy2 = int(gy1+guide_h)
-            gcx = disp_addapt_size_cx#int(gx1+(guide_w/2)); 
-            gcy = disp_addapt_size_cy#int(gy1+(guide_h/2))
+            gcx = disp_addapt_size_ori_cx#int(gx1+(guide_w/2)); 
+            gcy = disp_addapt_size_ori_cy#int(gy1+(guide_h/2))
             gx1=max(3,gx1); 
             gy1=max(3,gy1)
             gx2=min(display.shape[1]-3,gx2); 
             gy2=min(display.shape[0]-3,gy2)
-            cv2.rectangle(display, (int(gx1), int(gy1)), (int(gx2), int(gy2)), (0,200,0), 2)
-            cv2.circle(display, (int(gcx), int(gcy)), 3, (0, 0, 255), -1)
+            if face_found:
+                cv2.rectangle(display, (int(gx1), int(gy1)), (int(gx2), int(gy2)), (0,200,0), 2)
+                cv2.circle(display, (int(gcx), int(gcy)), 3, (0, 0, 255), -1)
 
             #################################################################################
             # --- 지표 용 속도 계산 ---
             if _prev_t is None: _prev_t = now
             dt = max(1e-3, now - _prev_t)
-            #speed_px = est_speed_px_per_s(disp_cx, disp_cy, _prev_cx, _prev_cy, dt)
+            #speed_px = est_speed_px_per_s(disp_kf_cx, disp_kf_cy, _prev_cx, _prev_cy, dt)
             speed_px = est_speed_px_per_s(gcx, gcy, _prev_cx, _prev_cy, dt)
             speed_cm = speed_px * CM_PER_PIXEL
             if _prev_cx is not None:
                 # 지표2: 최근 STAB_WIN_SEC 동안 dist<=DT_THRESH_PX 비율
-                #dist = ((disp_cx - _prev_cx)**2 + (disp_cy - _prev_cy)**2) ** 0.5
+                #dist = ((disp_kf_cx - _prev_cx)**2 + (disp_kf_cy - _prev_cy)**2) ** 0.5
                 dist = ((gcx - _prev_cx)**2 + (gcy - _prev_cy)**2) ** 0.5
                 stab_buf.append((now, dist))
                 while stab_buf and (now - stab_buf[0][0]) > STAB_WIN_SEC:
@@ -494,25 +520,42 @@ def main():
 
             # --- 지표3: ICR3 (정지구간 원내 비율) ---
             if speed_px < STOP_SPEED_THR:
-                if icr3_phase == "idle":
-                    icr3_phase = "collect"
-                    #icr3_center = (disp_cx, disp_cy)
-                    icr3_center = (gcx, gcy)
+                if icr3_phase == "move":
+                    icr3_phase = "stop and collect start"
+                    #icr3_center = (disp_kf_cx, disp_kf_cy)
+                    icr3_center = (display_w//2, display_h//2)
                     icr3_t0 = now
                     icr3_inside = 0; icr3_total = 0
-                else:
-                    # 수집
-                    #r = ((disp_cx - icr3_center[0])**2 + (disp_cy - icr3_center[1])**2)**0.5
+                    if len(metric3_ratios)>0:
+                        matric3_text = f"[지표3] ICR3(원내 비율) = {metric3_ratios[len(metric3_ratios)-1]:.1f}%"
+                    else:
+                        matric3_text = f"[지표3] Data 없음 (원내 {ICR_RADIUS}px)"
+                elif icr3_phase == "stop and collect start":
+                    
+                    #r = ((disp_kf_cx - icr3_center[0])**2 + (disp_kf_cy - icr3_center[1])**2)**0.5
                     r = ((gcx - icr3_center[0])**2 + (gcy - icr3_center[1])**2)**0.5
-                    icr3_total += 1
-                    if r <= ICR_RADIUS: icr3_inside += 1
-                    if (now - icr3_t0) >= STOP_HOLD_SEC:
-                        ratio = 100.0 * icr3_inside / max(1, icr3_total)
-                        metric3_ratios.append(ratio)
-                        #print(f"[지표3] ICR3(원내 비율) = {ratio:.1f}%")
-                        icr3_phase = "idle"
+                    
+                    matric3_text = f"[지표3] 움직이다 멈춤!! 수집중... ({STOP_HOLD_SEC}/{int(now - icr3_t0-STOP_HOLD_START)}s) -> spec({ICR_RADIUS}px 이하 (현 {r:.1f}px))"
+                    if (now - icr3_t0) >= STOP_HOLD_START:
+                        icr3_total += 1
+                        if r <= ICR_RADIUS: 
+                            icr3_inside += 1
+                        if (now - icr3_t0) >= STOP_HOLD_SEC+STOP_HOLD_START:
+                            ratio = 100.0 * icr3_inside / max(1, icr3_total)
+                            metric3_ratios.append(ratio)
+                            #print(f"[지표3] ICR3(원내 비율) = {ratio:.1f}%")
+                            icr3_phase = "idle"
+
+                        cv2.circle(display, (int(display_w//2)-1, int(display_h/2)-1), ICR_RADIUS, (255, 0, 0), 2)
+                    
+                else:
+                    if len(metric3_ratios)>0:
+                        matric3_text = f"[지표3] ICR3(원내 비율) = {metric3_ratios[len(metric3_ratios)-1]:.1f}%"
+                    else:
+                        matric3_text = f"[지표3] Data 없음 (원내 {ICR_RADIUS}px)"
             else:
-                icr3_phase = "idle"
+                matric3_text = f"[지표3] 이동중!!"
+                icr3_phase = "move"
 
             #################################################################################
             # 메세지 출력
@@ -521,13 +564,15 @@ def main():
             # 좌상단: ZOOM, 속도
             #display = draw_text_kr(display, f"ZOOM x{z_now:.2f}", (10, 10), 26, 2)
             #print(f"[FACE] raw=({gcx},{gcy}) kalman=({kpx},{kpy}) size=({box_w}x{box_h}) speed≈{speed:.1f}cm/s")
-            display = draw_text_kr(display, f"[FACE] offset=({gcx-display.shape[1]//2},{gcy-display.shape[0]//2})", (10, display_h-140), 25, 2)
-            if len(metric1_speeds_px)>0 and len(metric1_speeds_cm)>0 and len(metric1_times)>0 :
-                display = draw_text_kr(display, f"[지표1] 속도: {metric1_speeds_px[len(metric1_speeds_px)-1]:5.1f}px/s  ({metric1_speeds_cm[len(metric1_speeds_cm)-1]:4.1f}cm/s) 재인식 {metric1_times[len(metric1_times)-1]:.3f}s", (10, display_h-110), 25, 2)
+            display = draw_text_kr(display, f"[FACE] offset from image center=({gcx-display.shape[1]//2},{gcy-display.shape[0]//2})", (10, display_h-140), 25, 2)
+            #if len(metric1_speeds_px)>0 and len(metric1_speeds_cm)>0 and len(metric1_times)>0 :
+            #    display = draw_text_kr(display, f"[지표1] 속도: {metric1_speeds_px[len(metric1_speeds_px)-1]:5.1f}px/s  ({metric1_speeds_cm[len(metric1_speeds_cm)-1]:4.1f}cm/s) 재인식 {metric1_times[len(metric1_times)-1]:.3f}s", (10, display_h-110), 25, 2)
+            if  len(metric1_times)>0 :
+                display = draw_text_kr(display, f"[지표1] 재인식 시간 : {metric1_times[len(metric1_times)-1]:.3f}s", (10, display_h-110), 25, 2)
             if len(metric2_ratios)>0:
                 display = draw_text_kr(display, f"[지표2] 비율: {metric2_ratios[len(metric2_ratios)-1]:5.1f}%", (10, display_h-80), 25, 2)
-            if len(metric3_ratios)>0:
-                display = draw_text_kr(display, f"[지표3] ICR3(원내 비율) = {metric3_ratios[len(metric3_ratios)-1]:.1f}%", (10, display_h-50), 25, 2)
+            #if len(metric3_ratios)>0:
+            display = draw_text_kr(display, matric3_text, (10, display_h-50), 25, 2)
             
             # 녹화중일 경우
             if recording and msg_lt_display==False :
@@ -588,7 +633,7 @@ def main():
                 speed = (vx_pix**2 + vy_pix**2)**0.5 * CM_PER_PIXEL
                 out_h, out_w = out_frame.shape[:2]
                 #print(f"[FACE] raw=({gcx},{gcy}) kalman=({kpx},{kpy}) size=({box_w}x{box_h}) speed≈{speed:.1f}cm/s")
-                #print(f"[image] framew,h=({frame_w},{frame_h}) displayw,h=({display_w},{display_h}) frame[{int(disp_cy-(display_h/2))}:{int(disp_cy+(display_h/2))} , {int(disp_cx-(display_w/2))}:{int(disp_cx+(display_w/2))}]")
+                #print(f"[image] framew,h=({frame_w},{frame_h}) displayw,h=({display_w},{display_h}) frame[{int(disp_kf_cy-(display_h/2))}:{int(disp_kf_cy+(display_h/2))} , {int(disp_kf_cx-(display_w/2))}:{int(disp_kf_cx+(display_w/2))}]")
                 last_log = now
 
             # --- 로봇팔 제어 ---
@@ -611,9 +656,9 @@ def main():
 
             if key == ord('s') and not recording and not photo_shooting:
                 output_path = get_new_filename()
+
                 record_w = out_frame.shape[1] if RECORD_USE_STAB else frame_w
                 record_h = out_frame.shape[0] if RECORD_USE_STAB else frame_h
-                #out = cv2.VideoWriter(output_path, fourcc, CAP_FPS, (display.shape[1], display.shape[0]))
                 out = cv2.VideoWriter(output_path, fourcc, frame_per_sec, (record_w, record_h))
                 if not out.isOpened():
                     #print("VideoWriter 열기 실패"); out = None
@@ -635,6 +680,7 @@ def main():
             # 녹화 프레임 쓰기
             if recording and out is not None:
                 clean = out_frame if RECORD_USE_STAB else frame
+                #clean = croped if RECORD_USE_STAB else frame
                 #clean = cv2.flip(clean,1)
                 out.write(clean)
 
