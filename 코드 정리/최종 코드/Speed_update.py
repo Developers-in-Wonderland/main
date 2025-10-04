@@ -61,7 +61,7 @@ def draw_text(img, text, org, font_scale=0.8, thickness=2):
     cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0,0,0), thickness, cv2.LINE_AA)
 
 # ================== 시리얼 송신 스레드 ==================
-def serial_worker(q, port='COM3', baud=115200):
+def serial_worker(q, port='COM5', baud=115200):
     try:
         ser = serial.Serial(port, baud, timeout=1)
         time.sleep(2)
@@ -358,7 +358,7 @@ q = queue.Queue()
 serial_thread = threading.Thread(target=serial_worker, args=(q,), daemon=True)
 serial_thread.start()
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)   # 1080p 권장
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 if not cap.isOpened():
