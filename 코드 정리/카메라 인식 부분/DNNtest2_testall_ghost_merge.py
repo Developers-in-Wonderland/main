@@ -44,7 +44,7 @@ def draw_text_kr(img, text, org, font_size=26, thickness=2):
 
 # ------------------ 기본/저장 ------------------
 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-CAP_WIDTH, CAP_HEIGHT, CAP_FPS = 1920, 1080, 30
+CAP_WIDTH, CAP_HEIGHT, CAP_FPS = 1920, 1080, 60
 RECORD_USE_STAB = True
 
 # ------------------ 검출/추적 ------------------
@@ -343,7 +343,7 @@ def main():
     print("키: s/e=녹화 시작/종료, 1~9=연속촬영(장수), q=종료")
     try:
         frame_idx = 0
-
+        frame_per_sec = 0
         frame_idx_per_sec = 0
         sum_time_per_sec = 0
 
@@ -357,7 +357,8 @@ def main():
             sum_time_per_sec += (now-pre_frame_time)
             frame_idx_per_sec = frame_idx_per_sec+1
             if sum_time_per_sec > 1.0 :
-                print(f"frame per sec : {frame_idx_per_sec}")
+                frame_per_sec = frame_idx_per_sec
+                print(f"frame per sec : {frame_per_sec}")
                 sum_time_per_sec = 0
                 frame_idx_per_sec = 0
 
@@ -532,9 +533,9 @@ def main():
             if recording and msg_lt_display==False :
                 msg_lt_text, msg_lt_until = "녹화 중!", now + 500.0
                 
-            if recording==False and photo_shooting==False:
-                msg_lt_text = False
-                msg_lt_until = 0
+            #if recording==False and photo_shooting==False:
+            #    msg_lt_text = False
+            #    msg_lt_until = 0
 
             # 상단 메시지들(시작/종료/연속촬영 안내)
             if now < msg_lt_until and msg_lt_text:
@@ -574,7 +575,7 @@ def main():
                     if photo_taken >= photo_count:
                         photo_shooting = False
                         next_shot_at = None
-                        print("연속 사진 촬영 완료!")
+                        msg_lt_text, msg_lt_until = f"연속 사진 촬영 완료)", now + 1.0
                     else:
                         next_shot_at = now + photo_interval
                 display = draw_text_kr(display, f"남은 장 수: {remain}", (display.shape[1]-220, 10), 28, 2)
@@ -610,13 +611,18 @@ def main():
 
             if key == ord('s') and not recording and not photo_shooting:
                 output_path = get_new_filename()
-                out = cv2.VideoWriter(output_path, fourcc, CAP_FPS, (display.shape[1], display.shape[0]))
+                record_w = out_frame.shape[1] if RECORD_USE_STAB else frame_w
+                record_h = out_frame.shape[0] if RECORD_USE_STAB else frame_h
+                #out = cv2.VideoWriter(output_path, fourcc, CAP_FPS, (display.shape[1], display.shape[0]))
+                out = cv2.VideoWriter(output_path, fourcc, frame_per_sec, (record_w, record_h))
                 if not out.isOpened():
-                    print("VideoWriter 열기 실패"); out = None
+                    #print("VideoWriter 열기 실패"); out = None
+                    msg_lt_text, msg_lt_until = f"VideoWriter 열기 실패", now + 1.0
+                    out = None
                 else:
                     recording = True
-                    print(f"녹화 시작: {os.path.basename(output_path)}")
-                    msg_lt_text, msg_lt_until = "녹화 시작!", now + 1.0
+                    #print(f"녹화 시작: {os.path.basename(output_path)}")
+                    msg_lt_text, msg_lt_until = f"녹화 시작: {os.path.basename(output_path)}", now + 1.0
                     msg_lt_display = True
 
             if key == ord('e') and recording:
@@ -626,6 +632,12 @@ def main():
                 msg_lt_text, msg_lt_until = "녹화 종료!", now + 1.0
                 msg_lt_display = True
 
+            # 녹화 프레임 쓰기
+            if recording and out is not None:
+                clean = out_frame if RECORD_USE_STAB else frame
+                #clean = cv2.flip(clean,1)
+                out.write(clean)
+
             # 연속촬영 시작 (1~9)
             if (ord('1') <= key <= ord('9')) and not photo_shooting:
                 photo_count = key - ord('0')
@@ -634,11 +646,7 @@ def main():
                 next_shot_at = now + photo_interval  # 3초 뒤 촬영
                 #print()
                 msg_lt_text, msg_lt_until = f"{photo_count}장의 사진 연속 촬영 시작! (간격 {photo_interval:.0f}초)", now + 500
-                # 녹화 프레임 쓰기
-                if recording and out is not None:
-                    clean = out_frame if RECORD_USE_STAB else frame
-                    clean = cv2.flip(clean,1)
-                    out.write(clean)
+                
             
             pre_frame_time = now
 
