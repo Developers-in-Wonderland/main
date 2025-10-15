@@ -27,7 +27,7 @@ def get_new_picture_filename(base_name="picture", ext="jpg"):
     return os.path.join(desktop_path, f"{base_name}_{next_number}.{ext}")
 
 ############ 시리얼 전송 스레드 ###############
-def serial_worker(q, port='COM3', baud=115200):
+def serial_worker(q, port='COM5', baud=115200):
     try:
         ser = serial.Serial(port, baud, timeout=1)
         time.sleep(2)  # 아두이노 리셋 대기
@@ -72,7 +72,7 @@ q = queue.Queue()
 serial_thread = threading.Thread(target=serial_worker, args=(q,), daemon=True)
 serial_thread.start()
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 if not cap.isOpened():
     print("카메라 열기 실패")
     exit()
