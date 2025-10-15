@@ -226,9 +226,9 @@ def compute_motor_angles_safe(center_x, center_y, area, frame_shape):
         "motor_1": -ddx,
         "motor_2": 0,
         "motor_3": ddy,
-        "motor_4": 3 * ddz,
-        "motor_5": -2 * ddz,
-        "motor_6": ddz,
+        "motor_4": 0,
+        "motor_5": 0,
+        "motor_6": 0,
         "motor_7": delay
     }
 
@@ -288,7 +288,7 @@ class OneEuro:
 # 캡처 스레드
 # ============================================================
 class CaptureThread:
-    def __init__(self, cam_index=0, backend=cv2.CAP_DSHOW):
+    def __init__(self, cam_index=1, backend=cv2.CAP_DSHOW):
         debug_log(f"카메라 초기화 시작: index={cam_index}", "INFO", force=True)
         self.cap = cv2.VideoCapture(cam_index, backend)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAP_WIDTH)
@@ -339,8 +339,8 @@ class CaptureThread:
                 with self.lock:
                     self.latest = f
                     self.frame_count += 1
-            else:
-                debug_log("프레임 읽기 실패", "WARN")
+            # else:
+                # debug_log("프레임 읽기 실패", "WARN")
 
     def read(self):
         with self.lock:
@@ -631,7 +631,7 @@ def main():
         while True:
             ok, frame = cap_thread.read()
             if not ok:
-                debug_log("프레임 읽기 실패", "WARN")
+                # debug_log("프레임 읽기 실패", "WARN")
                 continue
 
             now = time.time()
@@ -961,7 +961,7 @@ def main():
                     icr3_t0 = now
                     icr3_inside = 0
                     icr3_total = 0
-                    debug_log(f"ICR3 수집 시작", "INFO")
+                    # debug_log(f"ICR3 수집 시작", "INFO")
                     if len(metric3_ratios)>0:
                         matric3_text = f"[지표3] ICR3={metric3_ratios[-1]:.1f}%"
                     else:
@@ -976,7 +976,7 @@ def main():
                         if (now - icr3_t0) >= STOP_HOLD_SEC+STOP_HOLD_START:
                             ratio = 100.0 * icr3_inside / max(1, icr3_total)
                             metric3_ratios.append(ratio)
-                            debug_log(f"ICR3 수집 완료: {ratio:.1f}%", "INFO")
+                            # debug_log(f"ICR3 수집 완료: {ratio:.1f}%", "INFO")
                             icr3_phase = "idle"
                         cv2.circle(display, (display_w//2, display_h//2), ICR_RADIUS, (255,0,0), 2)
                 else:
