@@ -1,0 +1,116 @@
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+
+// ----- 서보 관련 상수 정의 -----
+#define SERVOMIN 102    // 최소 펄스 길이 (≈ 1000μs / 4.88)
+#define SERVOMAX 512    // 최대 펄스 길이 (≈ 2000μs / 4.88)
+#define DEGREE_MIN 0    // 최소 각도
+#define DEGREE_MAX 180  // 최대 각도
+#define NUM_MOTORS 6    // 모터 개수
+
+// ----- PCA9685 객체 정의 (외부에서 extern으로 참조됨) -----
+Adafruit_PWMServoDriver pca9685 = Adafruit_PWMServoDriver(0x40);
+
+class Robot {
+    private:
+        static Robot *_instance;
+
+        int motor_vals[NUM_MOTORS + 1] = { 0 };  // 받아오는 입력값
+        int curr_degree[NUM_MOTORS] = {100, 55, 100, 90, 90, 140}; // 현재 모터 각도
+        int curr_pulse[NUM_MOTORS] = {0, 0, 0, 0, 0, 0}; // 현재 모터 펄스값
+        int min_degree[NUM_MOTORS] = {0, 0, 30, 0, 30, 20}; // 모터 각도 최소값
+        int max_degree[NUM_MOTORS] = {180, 90, 150, 120, 150, 160}; // 모터 각도 최대값
+
+        // 초기 각도를 펄스로 바꿔 저장
+        Robot() {
+            for (int i = 0; i < NUM_MOTORS; i++) {
+                curr_pulse[i] = setPulse(curr_degree[i]);
+            }
+
+            setServoAngle();
+        }
+
+        // 모터를 현재 저장된 각도(펄스)로 이동하게 함
+        void setServoAngle() {
+            for (int i = 0; i < NUM_MOTORS; i++) {
+                pca9685.setPWM(i, 0, curr_pulse[i]);
+            }
+        }
+
+        // 각도를 펄스로 바꾸는 함수
+        int setPulse(int degree) {
+            int pulse = map(degree, DEGREE_MIN, DEGREE_MAX, SERVOMIN, SERVOMAX);
+            return pulse;
+        }
+
+        // 펄스를 각도로 바꾸는 함수
+        int setDegree(int pulse) {
+            int degree = map(pulse, SERVOMIN, SERVOMAX, DEGREE_MIN, DEGREE_MAX);
+            return degree;
+        }
+
+        // 각도 범위제한
+        void checklimit() {
+            for (int i = 0; i < NUM_MOTORS; i++) {
+                int min_pulse = setPulse(min_degree[i]);
+                int max_pulse = setPulse(max_degree[i]);
+                curr_pulse[i] = constrain(curr_pulse[i], min_pulse, max_pulse);
+            }
+        }   
+
+        // 입력받은 값 기반으로 동작하는 함수
+        void moving() {
+
+            for (int i = 0; i < NUM_MOTORS; i++) {
+                curr_pulse[i] += motor_vals[i];  
+                checklimit();
+                curr_degree[i] = setDegree(curr_pulse[i]); // 현재 각도를 저장해놓음
+            }
+            setServoAngle();
+            delay(10);
+        }
+
+    public:
+        static Robot* getInstance();
+
+        // 시리얼 입력 기반 동작 테스트 함수
+        void moveArm() {
+            if (Serial.available()) {
+                String input = Serial.readStringUntil('\n');
+                input.trim();
+
+                uint8_t idx = 0;
+                char* token = strtok((char*)input.c_str(), ",");
+
+                while (token && idx < NUM_MOTORS + 1) {
+                    motor_vals[idx++] = atoi(token);
+                    token = strtok(NULL, ",");
+                }
+
+                moving();
+            }
+        }
+};
+
+Robot* robot = nullptr;
+
+Robot* Robot::_instance = nullptr;
+
+Robot* Robot::getInstance() {
+    if (_instance == nullptr) {
+        _instance = new Robot();
+    }
+    return _instance;
+}
+
+void setup() {
+    Serial.begin(115200);
+    pca9685.begin();
+    pca9685.setPWMFreq(50);
+
+    robot = Robot::getInstance();
+}
+
+void loop() {
+   robot->moveArm();
+}
