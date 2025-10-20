@@ -59,7 +59,7 @@ serial_health = {
 }
 
 # 검출/추적
-DETECT_EVERY = 1
+DETECT_EVERY = 1 # 1프레임 단위로 검출
 LEAD_FACE_SEC = 0.12
 CM_PER_PIXEL = 0.050
 
@@ -73,33 +73,33 @@ motor_freeze_time = {"x": 0, "y": 0, "z": 0}
 FREEZE_DURATION_S = 0.6
 
 # 중앙고정 & 줌
-RATIO_TRANSLATE = 0.3
+RATIO_TRANSLATE = 0.3 # 최대 이동 비율, 디지털 짐벌
 
 # 정량지표
 reacquire_t0 = None
-metric1_times = []
+metric1_times = [] # 재획득 시간 목록
 metric1_speeds_px = []
 metric1_speeds_cm = []
 
-DT_THRESH_PX = 10.0
+DT_THRESH_PX = 10.0 # 안정 판정 임계 이동량
 STAB_WIN_SEC = 3.0
 stab_buf = deque()
 metric2_ratios = []
 
-STOP_SPEED_THR = 10.0
-STOP_HOLD_START = 0.5
-STOP_HOLD_SEC = 3.0
+STOP_SPEED_THR = 10.0 #정지 판단 (px/s)
+STOP_HOLD_START = 0.5 #정지 시작 후 유예
+STOP_HOLD_SEC = 3.0 # 집계시간
 icr3_phase = "idle"
 icr3_center = None
 icr3_t0 = 0.0
 icr3_inside = 0
 icr3_total = 0
-ICR_RATIO = 0.03
+ICR_RATIO = 0.03 # 지표3의 원 반경 화면 대각선 * 3% 
 ICR_RADIUS = 0.0
 metric3_ratios = []
 matric3_text = ""
 
-_prev_cx, _prev_cy = None, None
+_prev_cx, _prev_cy = None, None # 이전 프레임 좌표 (지표용)
 _prev_t = None
 
 # 디버깅 카운터
@@ -143,6 +143,7 @@ def debug_log(message, level="INFO", force=False):
 # ============================================================
 # 도우미 함수
 # ============================================================
+# 영상, 사진 저장
 def get_new_filename(base_name="output", ext="avi"):
     existing = os.listdir(desktop_path)
     pat = re.compile(rf"{re.escape(base_name)}_(\d+)\.{re.escape(ext)}")
@@ -293,37 +294,28 @@ class CaptureThread:
     def __init__(self, cam_index=0, backend=cv2.CAP_DSHOW):
         debug_log(f"카메라 초기화 시작: index={cam_index}", "INFO", force=True)
         self.cap = cv2.VideoCapture(cam_index, backend)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAP_WIDTH)
+
+        # 포맷을 먼저 못박아 두는 게 협상 지연을 줄이는 데 도움됨
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAP_WIDTH)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAP_HEIGHT)
-        self.cap.set(cv2.CAP_PROP_FPS, CAP_FPS)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        try:
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        except:
-            pass
-        
+        self.cap.set(cv2.CAP_PROP_FPS,          CAP_FPS)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
+
         if not self.cap.isOpened():
             debug_log("카메라 열기 실패!", "ERROR", force=True)
             raise RuntimeError("카메라 열기 실패")
-        
-        actual_w = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        actual_h = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
+
+        # 워밍업: 캡이 실제 스트리밍을 시작하도록 첫 0.5~1초간 프레임 버림
+        t0 = time.time()
+        while time.time() - t0 < 0.7:
+            self.cap.grab()
+
+        actual_w  = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        actual_h  = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        actual_fps= self.cap.get(cv2.CAP_PROP_FPS)
         debug_log(f"카메라 설정: {actual_w}x{actual_h} @ {actual_fps}fps", "INFO", force=True)
-        
-        try:
-            self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-        except:
-            pass
-        try:
-            self.cap.set(cv2.CAP_PROP_AUTO_WB, 1)
-        except:
-            pass
-        try:
-            self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        except:
-            pass
-        
+
         self.lock = threading.Lock()
         self.latest = None
         self.running = True
@@ -331,12 +323,11 @@ class CaptureThread:
         self.th = threading.Thread(target=self.loop, daemon=True)
         self.th.start()
         debug_log("캡처 스레드 시작됨", "INFO", force=True)
-    
+
     def loop(self):
+        # 불필요한 2회 grab 제거 → read 한 번이 더 안정적인 경우가 많음
         while self.running:
-            for _ in range(2):
-                self.cap.grab()
-            ret, f = self.cap.retrieve()
+            ret, f = self.cap.read()
             if ret:
                 with self.lock:
                     self.latest = f
@@ -719,8 +710,8 @@ def main():
 
             frame = cv2.flip(frame,1)
             frame_h, frame_w = frame.shape[:2]
-		    frame_cx = frame_h//2
-            frame_cy = frame_w//2
+		    #frame_cx = frame_h//2
+            #frame_cy = frame_w//2
 
             if ICR_RADIUS <= 0:
                 ICR_RADIUS = int(((((frame_w/2)**2) + ((frame_h/2)**2))**0.5) * ICR_RATIO)
@@ -834,12 +825,12 @@ def main():
             ##-----------------------------------------------------------------
 
             # 화면 표시용 스무딩
-            #disp_kf_cx = int(cx_oe.filter(use_cx, now)) #칼만
-            #disp_kf_cy = int(cy_oe.filter(use_cy, now)) #칼만
+            disp_kf_cx = int(cx_oe.filter(use_cx, now)) #칼만
+            disp_kf_cy = int(cy_oe.filter(use_cy, now)) #칼만
  			#disp_kf_cx = frame_cx# original
             #disp_kf_cy = frame_cy# original
-            disp_kf_cx = box_cx#센터 고정
-            disp_kf_cy = box_cy#센터 고정
+            #disp_kf_cx = box_cx#센터 고정
+            #disp_kf_cy = box_cy#센터 고정
             disp_ori_cx = box_cx
             disp_ori_cy = box_cy
 
