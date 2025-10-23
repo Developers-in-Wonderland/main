@@ -10,6 +10,12 @@ import time
 import sys
 from collections import deque
 
+cv2.setUseOptimized(True)
+try:
+    cv2.ocl.setUseOpenCL(True)
+except Exception:
+    pass
+
 # ====== 한글 텍스트 유지를 위한 PIL 사용 ======
 from PIL import ImageFont, ImageDraw, Image
 
@@ -57,6 +63,9 @@ serial_health = {
     "total_errors": 0,
     "connection_lost": False
 }
+
+# 오버레이 3프레임마다 그리기
+OVERLAY_EVERY = 3   # 3프레임마다만 draw_text_kr 실행
 
 # 검출/추적
 DETECT_EVERY = 1 # 1프레임 단위로 검출
@@ -308,7 +317,8 @@ class CaptureThread:
 
         # 워밍업: 캡이 실제 스트리밍을 시작하도록 첫 0.5~1초간 프레임 버림
         t0 = time.time()
-        while time.time() - t0 < 0.7:
+        # 워밍업: 초기 자동노출/포커스 안정화용
+        for _ in range(20):  # 약 20프레임 버리기 (0.3~0.5초)
             self.cap.grab()
 
         actual_w  = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
@@ -325,16 +335,28 @@ class CaptureThread:
         debug_log("캡처 스레드 시작됨", "INFO", force=True)
 
     def loop(self):
-        # 불필요한 2회 grab 제거 → read 한 번이 더 안정적인 경우가 많음
+        # 오래된 프레임을 덜어내고, 디코딩 비용을 줄이기 위한 루프
+        DROP_OLD_FRAMES = True     # 필요 없으면 False
+
         while self.running:
-            ret, f = self.cap.read()
+            if DROP_OLD_FRAMES:
+                 for _ in range(3):  # 프레임 3장 버리기
+                    self.cap.grab()
+
+            # grab으로 캡처 → retrieve로 디코딩 (read()보다 유연)
+            ret = self.cap.grab()
+            if not ret:
+                debug_log("프레임 grab 실패", "WARN")
+                continue
+
+            ret, f = self.cap.retrieve()
             if ret:
                 with self.lock:
                     self.latest = f
                     self.frame_count += 1
             else:
-                debug_log("프레임 읽기 실패", "WARN")
-    
+                debug_log("프레임 retrieve 실패", "WARN")
+
     def read(self):
         with self.lock:
             if self.latest is None:
@@ -825,12 +847,12 @@ def main():
             ##-----------------------------------------------------------------
 
             # 화면 표시용 스무딩
-            disp_kf_cx = int(cx_oe.filter(use_cx, now)) #칼만
-            disp_kf_cy = int(cy_oe.filter(use_cy, now)) #칼만
+            #disp_kf_cx = int(cx_oe.filter(use_cx, now)) #칼만
+            #disp_kf_cy = int(cy_oe.filter(use_cy, now)) #칼만
  			#disp_kf_cx = frame_cx# original
             #disp_kf_cy = frame_cy# original
-            #disp_kf_cx = box_cx#센터 고정
-            #disp_kf_cy = box_cy#센터 고정
+            disp_kf_cx = box_cx#센터 고정
+            disp_kf_cy = box_cy#센터 고정
             disp_ori_cx = box_cx
             disp_ori_cy = box_cy
 
@@ -940,14 +962,19 @@ def main():
                 matric3_text = f"[지표3] 이동중"
                 icr3_phase = "move"
 
-            # 오버레이
-            display = draw_text_kr(display, f"[FACE] offset=({gcx-display.shape[1]//2},{gcy-display.shape[0]//2})", (10, display_h-140), 25, 2)
-            if len(metric1_times)>0:
-                display = draw_text_kr(display, f"[지표1] 재인식: {metric1_times[-1]:.3f}s", (10, display_h-110), 25, 2)
-            if len(metric2_ratios)>0:
-                display = draw_text_kr(display, f"[지표2] 안정: {metric2_ratios[-1]:5.1f}%", (10, display_h-80), 25, 2)
-            display = draw_text_kr(display, matric3_text, (10, display_h-50), 25, 2)
-            
+            # ---- 오버레이 (쓰로틀) ----
+            #if frame_idx % OVERLAY_EVERY == 0:
+                #display = draw_text_kr(display, f"[FACE] offset=({gcx-display.shape[1]//2},{gcy-display.shape[0]//2})", (10, display_h-140), 25, 2)
+                #if len(metric1_times)>0:
+                   #display = draw_text_kr(display, f"[지표1] 재인식: {metric1_times[-1]:.3f}s", (10, display_h-110), 25, 2)
+                #if len(metric2_ratios)>0:
+                    #display = draw_text_kr(display, f"[지표2] 안정: {metric2_ratios[-1]:5.1f}%", (10, display_h-80), 25, 2)
+                #display = draw_text_kr(display, matric3_text, (10, display_h-50), 25, 2)
+            #else:
+                # 쓰로틀되는 프레임에는 가벼운 cv2.putText만 (영문/숫자)
+                #cv2.putText(display, f"FPS:{frame_per_sec} | Q:{q.qsize()}",
+                            #(10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 1)
+
             # 디버깅 정보 화면 표시
             if DEBUG_MODE:
                 info_text = f"FPS:{frame_per_sec} | Serial:{debug_counters['serial_sent']}/{debug_counters['serial_error']} | Queue:{q.qsize()}"
