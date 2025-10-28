@@ -44,6 +44,7 @@ def draw_text_kr(img, text, org, font_size=26, thickness=2):
 # ============================================================
 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
 CAP_WIDTH, CAP_HEIGHT, CAP_FPS = 1920, 1080, 60
+#CAP_WIDTH, CAP_HEIGHT, CAP_FPS = 640, 480, 60
 RECORD_USE_STAB = True
 
 # ⭐ 디버깅 설정
@@ -65,10 +66,10 @@ serial_health = {
 }
 
 # 오버레이 3프레임마다 그리기
-OVERLAY_EVERY = 3   # 3프레임마다만 draw_text_kr 실행
+OVERLAY_EVERY = 1   # 3프레임마다만 draw_text_kr 실행
 
 # 검출/추적
-DETECT_EVERY = 1 # 1프레임 단위로 검출
+DETECT_EVERY = 2 # 1프레임 단위로 검출
 LEAD_FACE_SEC = 0.12
 CM_PER_PIXEL = 0.050
 
@@ -310,6 +311,9 @@ class CaptureThread:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAP_HEIGHT)
         self.cap.set(cv2.CAP_PROP_FPS,          CAP_FPS)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
+        self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.0)   # 일부 장치는 0.25=auto, 0.0=manual (반대인 경우도 있어 둘 다 시도)
+        self.cap.set(cv2.CAP_PROP_EXPOSURE, -6)         # 장치마다 -5~-8 범위 테스트
+
 
         if not self.cap.isOpened():
             debug_log("카메라 열기 실패!", "ERROR", force=True)
@@ -710,6 +714,18 @@ def main():
         area = 0
         pre_frame_time = 0
 
+        ##-----------------------------------------------------------------------------------------
+        ## 251025_MJ_떨림 보정을 위한 이전과 현재 Frame의 Data
+        ##-----------------------------------------------------------------------------------------
+        
+        pre_gray = None     # 이전 Frame Image (알고리즘 속도를 위해 Color가 아닌 Gray 영상으로 저장)
+        cur_gray = None     # 현재 Frame Image (알고리즘 속도를 위해 Color가 아닌 Gray 영상으로 저장)
+        pre_pts = None      # 이전 Frame의 Feature Point 위치
+        cur_pts = None      # 현재 Frame의 Feature Point 위치
+        comp_frame_cx = 0   # 떨림 보정을 위한 Frame Center X
+        comp_frame_cy = 0   # 떨림 보정을 위한 Frame Center Y
+        ##-----------------------------------------------------------------------------------------
+
         while True:
             ok, frame = cap_thread.read()
             if not ok:
@@ -732,7 +748,7 @@ def main():
 
             frame = cv2.flip(frame,1)
             frame_h, frame_w = frame.shape[:2]
-		    #frame_cx = frame_h//2
+            #frame_cx = frame_h//2
             #frame_cy = frame_w//2
 
             if ICR_RADIUS <= 0:
@@ -768,7 +784,7 @@ def main():
             if face_found:
                 face_boxes.sort(key=lambda b: b[2]*b[3], reverse=True)
                 box_l, box_t, box_w, box_h = face_boxes[0]
-                box_cx, box_cy = box_l + box_w//2, box_t + box_h//2
+                box_cx, box_cy = box_l + round(box_w/2), round(box_t + box_h/2)
                 area = box_w*box_h
                 
                 if not ever_locked:
@@ -844,15 +860,117 @@ def main():
                     q.put(stop_cmd)
             elif not move_ready.is_set():
                 debug_log(f"move_ready 대기 중...", "DETAIL")
-            ##-----------------------------------------------------------------
+##-----------------------------------------------------------------
 
             # 화면 표시용 스무딩
-            #disp_kf_cx = int(cx_oe.filter(use_cx, now)) #칼만
-            #disp_kf_cy = int(cy_oe.filter(use_cy, now)) #칼만
- 			#disp_kf_cx = frame_cx# original
+            #disp_kf_cx = int(cx_oe.filter(use_cx, now)) # kalman
+            #disp_kf_cy = int(cy_oe.filter(use_cy, now)) # kalmal
+            #disp_kf_cx = frame_cx# original
             #disp_kf_cy = frame_cy# original
-            disp_kf_cx = box_cx#센터 고정
-            disp_kf_cy = box_cy#센터 고정
+
+            ##-----------------------------------------------------------------
+            ## 251025_Image의 떨림을 분석해서 Frame 처리 나눔
+            ##-----------------------------------------------------------------
+                
+            """
+            떨림의 판단은 이전 Frame, 현재 Frame간의 Feature 거리로 판단 (임의로 50px로 고정해놨음)
+                현재 문제가 Image Center 판단을 DNN box Center로 하는데 그게 DNN에서 얼굴 Box Size가 변함에 따라서도 Center가 흔들리는 현상이 있음.
+                그 흔들리는 Center위치로 Image Center를 강제로 고정하여 움직이니까 멈춰 있는 Image 에서도 떨리는 현상 발생
+                그래서 One Euro로 떨림을 완화 시켰는데 이걸 적용하면 문제가 모터가 떨려서 Image가 흔들릴때 그걸 보정하지 못함 (보정은 하는데 부드럽게 떨리니까 흔들리는게 보정 안됨)
+                그래서 Frame간에 얼굴을 제외한 배경의 떨림을 분석해서 box Center와 One euro 보정을 나누어서 적용함.
+
+            1. 떨림이 심할 경우 (모터 작동 중이거나 모터가 흔들릴때. 이경우에는 Image 전체가 떨린다)
+                - 판단 기준 : 배경의 이전/지금 Frame간 Feature의 이동 거리 전체 평균이 DEADZONE_XY//2 이상일때
+                - 알고리즘  : Box Center로 강제 지정
+                  (이렇게한 이유는 Image 전체가 움직일 경우에는 얼굴 center인 Box Center로 하는게 그나마 덜 떨려보임)
+
+            2. 떨림이 없을 경우 (가만히 있는데 얼굴의 Box만 떨릴때, 이 경우에는 배경은 안떨리고 멀쩡하기 때문에 최대한 영상처리로 인해 슬쩍 센터 맞춘다) 
+                - 판단 기준 : 배경의 이전/지금 Frame간 Feature의 이동 거리 전체 평균이 DEADZONE_XY//2 이하일때
+                - 알고리즘 : 두가지의 경우로 나뉘어 조치한다.
+                1) box center가 Image Center에서 가까이 있을 경우 
+                    - One Euro로 보정된 Center로 지정
+            """
+
+            if(comp_frame_cx is 0):                 # 보정 Frame Cetner Data가 없을 경우
+                comp_frame_cx = frame_w // 2        # 실제 Frame Center
+
+            if(comp_frame_cy is 0):                 # 보정 Frame Cetner Data가 없을 경우
+                comp_frame_cy = frame_h // 2        # 실제 Frame Center
+
+            average_dist = 0                        # 이전 Frame과 현재 Frame 배경 이동의 거리 평균
+            average_count = 0                       # average_dist를 구하기 위한 Featur Count
+            DEF_MAX_SHAKE_DISTANCE = DEADZONE_XY//2 # Image 떨림을 판단하는 기준 (DEADZONE_XY//2 로 한 이유는 이동이 DEADZONE_XY 이상으로 하면 애초에 모터가 움직이기 때문에 무조건 떨리게 되어있음)
+            DEF_MIN_FRAME_CENTER_DISTANCE = 5       # 실제 Frame의 Center와 Box의 거리 (이 거리 이하일 경우에는 Image 보정하지 않고 그대로 둬야 안떨림. 이거 이상일 경우에는 원유로로 스무스하게 보정)            
+            fix_image_center = True                 # True일 경우 강제로 Image Center 지정
+
+            if( pre_gray is None ):                 # 이전 Frame이 없으면 그냥 현재 Frame 줌 (버그날까봐 처리해둔거)
+                pre_gray = cur_gray
+
+            pre_pts = cv2.goodFeaturesToTrack(pre_gray, maxCorners=1000, qualityLevel=0.01, minDistance=7) # 이전 Frame의 Feature 좌표 추출
+            cur_pts, status, err = cv2.calcOpticalFlowPyrLK( # 이전 Frame과 현재 Frame을 비교하여 현재 Frame의 Feature 좌표 추출
+                pre_gray, cur_gray, pre_pts, None,
+                winSize=(21,21), maxLevel=3,
+                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
+            )
+            good_prev = pre_pts[status.ravel()==1] # 유효한 좌표만 추출
+            good_next = cur_pts[status.ravel()==1]
+
+            err_good = err[status.ravel()==1].ravel()
+            mask = err_good < np.percentile(err_good, 90)  # 상위 10% 큰 오차 제거
+            good_prev = good_prev[mask]
+            good_next = good_next[mask]
+
+            # --- 🔧 shape 보정 추가 ---
+            pts_old = np.squeeze(good_prev)
+            pts_new = np.squeeze(good_next)
+
+            # 이전/현재 Frame 간의 배경 Feature 이동 거리 평균 계산
+            for (x0, y0), (x1, y1) in zip(pts_old, pts_new):
+                if x1 >= box_l and x1 <= (box_l+box_w) and y1 >= box_t and y1 <= (box_t+box_h): # box 안(얼굴) Data는 무시한다.
+                    continue
+
+                old_new_dx, old_new_dy = (x1 - x0), (y1 - y0) # 배경의 거리 계산
+                average_dist = average_dist + np.sqrt(old_new_dx**2 + old_new_dy**2) # 이동 거리의 유클리디안 거리 계산
+                average_count= average_count+1 # 평균 계산을 위해 Count
+
+            if average_count > 0: 
+                average_dist = average_dist / average_count # 평균 계산
+            else:
+                fix_image_center = True # 이동한게 전혀 없으면 box center로 고정한다
+
+            if(average_dist < DEF_MAX_SHAKE_DISTANCE): # Image 떨림이 심할 경우 (모터 이동중, 모터 떨림)
+                fix_image_center = False
+            else: # Image 떨림이 없을 경우 (모터 고정하여 가만히 있는 경우)
+                fix_image_center = True  
+
+            # image가 전체 떨릴때
+            if fix_image_center is True:
+                disp_kf_cx = box_cx # 센터 고정
+                disp_kf_cy = box_cy # 센터 고정
+
+            # image가 안떨릴 때
+            else:
+
+                # Frame Center와 Box Center의 거리를 구한다
+                diff_box_cx_val = box_cx - comp_frame_cx
+                diff_box_cy_val = box_cy - comp_frame_cy
+                diff_box_dist_val = np.sqrt(diff_box_cx_val**2+diff_box_cy_val**2)
+                
+                # Frame Center와 Box Center가 가까이 있을 때
+                if( diff_box_dist_val < DEF_MIN_FRAME_CENTER_DISTANCE ):
+                    disp_kf_cx = comp_frame_cx # 영상이 움직이지 않도록 Frame Center을 준다
+                    disp_kf_cy = comp_frame_cy
+                else : # Frame Center와 Box Center가 멀리 있을때
+                    disp_kf_cx = int(cx_oe.filter(use_cx, now)) # 원유로로 Center로 은근슬쩍 가도록 만든다
+                    disp_kf_cy = int(cy_oe.filter(use_cy, now))
+
+                    comp_frame_cx = disp_kf_cx # 그다음 Frame부터는 움직임을 최소화 하기 위해 Frame Center를 보정해준다
+                    comp_frame_cy = disp_kf_cy
+
+            pre_gray = cur_gray # 위의 작업이 끝났으면 현재 Frame을 이전 Frame으로 넘겨준다
+            
+            ##-----------------------------------------------------------------
+                
             disp_ori_cx = box_cx
             disp_ori_cy = box_cy
 
