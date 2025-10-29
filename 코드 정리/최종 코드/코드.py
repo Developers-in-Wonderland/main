@@ -939,7 +939,7 @@ def main():
             else:
                 fix_image_center = True # 이동한게 전혀 없으면 box center로 고정한다
 
-            if(average_dist < DEF_MAX_SHAKE_DISTANCE): # Image 떨림이 심할 경우 (모터 이동중, 모터 떨림)
+            if((average_dist * 5) < DEF_MAX_SHAKE_DISTANCE): # Image 떨림이 심할 경우 (모터 이동중, 모터 떨림)
                 fix_image_center = False
             else: # Image 떨림이 없을 경우 (모터 고정하여 가만히 있는 경우)
                 fix_image_center = True  
