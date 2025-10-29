@@ -731,7 +731,8 @@ def main():
             if not ok:
                 debug_log("프레임 읽기 실패", "WARN")
                 continue
-            
+            frame_resize = cv2.resize(frame, (100,100))
+            cur_gray = cv2.cvtColor(frame_resize,cv2.COLOR_BGR2GRAY)
             now = time.time()
             debug_counters["frame_count"] += 1
             
@@ -869,7 +870,7 @@ def main():
             #disp_kf_cy = frame_cy# original
 
             ##-----------------------------------------------------------------
-            ## 251025_Image의 떨림을 분석해서 Frame 처리 나눔
+            ## 251025_MJ_Image의 떨림을 분석해서 Frame 처리 나눔
             ##-----------------------------------------------------------------
                 
             """
@@ -963,7 +964,7 @@ def main():
                 else : # Frame Center와 Box Center가 멀리 있을때
                     disp_kf_cx = int(cx_oe.filter(use_cx, now)) # 원유로로 Center로 은근슬쩍 가도록 만든다
                     disp_kf_cy = int(cy_oe.filter(use_cy, now))
-
+                if( diff_box_dist_val < DEF_MIN_FRAME_CENTER_DISTANCE * 3):
                     comp_frame_cx = disp_kf_cx # 그다음 Frame부터는 움직임을 최소화 하기 위해 Frame Center를 보정해준다
                     comp_frame_cy = disp_kf_cy
 
@@ -973,6 +974,7 @@ def main():
                 
             disp_ori_cx = box_cx
             disp_ori_cy = box_cy
+                
 
             # 중앙 평행이동 + 크롭
             display_w = int(frame_w * (1-RATIO_TRANSLATE))
@@ -1019,6 +1021,8 @@ def main():
             gy1=max(3,gy1)
             gx2=min(display.shape[1]-3,gx2)
             gy2=min(display.shape[0]-3,gy2)
+
+            cv2.circle(display, (display_w//2, display_h//2), ICR_RADIUS, (255,0,0), 2)
             
             if face_found:
                 cv2.rectangle(display, (int(gx1), int(gy1)), (int(gx2), int(gy2)), (0,200,0), 2)
