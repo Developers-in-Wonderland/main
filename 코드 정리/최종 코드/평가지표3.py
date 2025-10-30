@@ -10,6 +10,12 @@ import time
 import sys
 from collections import deque
 
+cv2.setUseOptimized(True)
+try:
+    cv2.ocl.setUseOpenCL(True)
+except Exception:
+    pass
+    
 # ====== 한글 텍스트 유지를 위한 PIL 사용 ======
 from PIL import ImageFont, ImageDraw, Image
 
@@ -37,7 +43,7 @@ def draw_text_kr(img, text, org, font_size=26, thickness=2):
 # 설정값
 # ============================================================
 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-CAP_WIDTH, CAP_HEIGHT, CAP_FPS = 1920, 1080, 60
+CAP_WIDTH, CAP_HEIGHT, CAP_FPS = 1980, 1080, 60
 RECORD_USE_STAB = True
 
 # ⭐ 디버깅 설정
@@ -59,13 +65,13 @@ serial_health = {
 }
 
 # 검출/추적
-DETECT_EVERY = 1
+DETECT_EVERY = 2
 LEAD_FACE_SEC = 0.12
 CM_PER_PIXEL = 0.050
 
 # 제어(로봇팔) - 방법 A
 DESIRED_FACE_AREA = 35000
-DEADZONE_XY = 20
+DEADZONE_XY = 30
 DEADZONE_AREA = 12000
 move_ready = threading.Event()
 move_ready.set()
@@ -227,9 +233,9 @@ def compute_motor_angles_safe(center_x, center_y, area, frame_shape):
         "motor_1": -ddx,
         "motor_2": 0,
         "motor_3": ddy,
-        "motor_4": 3 * ddz,
-        "motor_5": -2 * ddz,
-        "motor_6": ddz,
+        "motor_4": 0,
+        "motor_5": 0,
+        "motor_6": 0,
         "motor_7": delay
     }
 
@@ -292,36 +298,33 @@ class CaptureThread:
     def __init__(self, cam_index=0, backend=cv2.CAP_DSHOW):
         debug_log(f"카메라 초기화 시작: index={cam_index}", "INFO", force=True)
         self.cap = cv2.VideoCapture(cam_index, backend)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAP_WIDTH)
+
+        # 포맷을 먼저 못박아 두는 게 협상 지연을 줄이는 데 도움됨
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAP_WIDTH)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAP_HEIGHT)
-        self.cap.set(cv2.CAP_PROP_FPS, CAP_FPS)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        try:
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        except:
-            pass
-        
+        self.cap.set(cv2.CAP_PROP_FPS,          CAP_FPS)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
+        self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.0)   # 일부 장치는 0.25=auto, 0.0=manual (반대인 경우도 있어 둘 다 시도)
+        self.cap.set(cv2.CAP_PROP_EXPOSURE, -6)         # 장치마다 -5~-8 범위 테스트
+
+
+       
         if not self.cap.isOpened():
             debug_log("카메라 열기 실패!", "ERROR", force=True)
             raise RuntimeError("카메라 열기 실패")
-        
-        actual_w = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        actual_h = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
+
+        # 워밍업: 캡이 실제 스트리밍을 시작하도록 첫 0.5~1초간 프레임 버림
+        t0 = time.time()
+        # 워밍업: 초기 자동노출/포커스 안정화용
+        for _ in range(20):  # 약 20프레임 버리기 (0.3~0.5초)
+            self.cap.grab()
+
+        actual_w  = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        actual_h  = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        actual_fps= self.cap.get(cv2.CAP_PROP_FPS)        
         debug_log(f"카메라 설정: {actual_w}x{actual_h} @ {actual_fps}fps", "INFO", force=True)
         
-        try:
-            self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-        except:
-            pass
-        try:
-            self.cap.set(cv2.CAP_PROP_AUTO_WB, 1)
-        except:
-            pass
-        try:
-            self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        except:
-            pass
         
         self.lock = threading.Lock()
         self.latest = None
@@ -330,18 +333,28 @@ class CaptureThread:
         self.th = threading.Thread(target=self.loop, daemon=True)
         self.th.start()
         debug_log("캡처 스레드 시작됨", "INFO", force=True)
-    
+        
     def loop(self):
+    # 오래된 프레임을 덜어내고, 디코딩 비용을 줄이기 위한 루프
+        DROP_OLD_FRAMES = True     # 필요 없으면 False
+
         while self.running:
-            for _ in range(2):
-                self.cap.grab()
+            if DROP_OLD_FRAMES:
+                 for _ in range(3):  # 프레임 3장 버리기
+                    self.cap.grab()
+
+            # grab으로 캡처 → retrieve로 디코딩 (read()보다 유연)
+            ret = self.cap.grab()
+            if not ret:
+                debug_log("프레임 grab 실패", "WARN")
+                continue
             ret, f = self.cap.retrieve()
             if ret:
                 with self.lock:
                     self.latest = f
                     self.frame_count += 1
-            else:
-                debug_log("프레임 읽기 실패", "WARN")
+            # else:
+                # debug_log("프레임 읽기 실패", "WARN")
     
     def read(self):
         with self.lock:
@@ -496,7 +509,7 @@ def detect_faces_dnn(frame, conf_thresh=0.5):
 # 칼만 필터
 # ============================================================
 def init_kalman():
-    debug_log("칼만 필터 초기화", "INFO")
+    # debug_log("칼만 필터 초기화", "INFO")
     kf = cv2.KalmanFilter(4,2)
     kf.measurementMatrix = np.array([[1,0,0,0],[0,1,0,0]], np.float32)
     kf.processNoiseCov = np.diag([1e-2,1e-2,1e-1,1e-1]).astype(np.float32)
@@ -577,9 +590,16 @@ def main():
         "3sec": False,
         "2sec": False,
         "1sec": False,
-        "move_start": False
+        "move_start": False,
+        "moving_3sec": False,
+        "moving_2sec": False,
+        "moving_1sec": False,
+        "stop_start": False,
+        "stop_3sec": False,
+        "stop_2sec": False,
+        "stop_1sec": False
     }
-    
+
     test_mode_active = True
     test_phase = "waiting"  # waiting → moving → stopping → done
     test_stop_start_time = 0
@@ -615,7 +635,7 @@ def main():
 
     face_boxes_preFrame = []
 
-    debug_log("메인 루프 시작", "INFO", force=True)
+    # debug_log("메인 루프 시작", "INFO", force=True)
 
     try:
         frame_idx = 0
@@ -627,12 +647,25 @@ def main():
         area = 0
         pre_frame_time = 0
 
+		##-----------------------------------------------------------------------------------------
+        ## 251025_MJ_떨림 보정을 위한 이전과 현재 Frame의 Data
+        ##-----------------------------------------------------------------------------------------
+        
+        pre_gray = None     # 이전 Frame Image (알고리즘 속도를 위해 Color가 아닌 Gray 영상으로 저장)
+        cur_gray = None     # 현재 Frame Image (알고리즘 속도를 위해 Color가 아닌 Gray 영상으로 저장)
+        pre_pts = None      # 이전 Frame의 Feature Point 위치
+        cur_pts = None      # 현재 Frame의 Feature Point 위치
+        comp_frame_cx = 0   # 떨림 보정을 위한 Frame Center X
+        comp_frame_cy = 0   # 떨림 보정을 위한 Frame Center Y
+        ##-----------------------------------------------------------------------------------------
+        
         while True:
             ok, frame = cap_thread.read()
             if not ok:
-                debug_log("프레임 읽기 실패", "WARN")
+                # debug_log("프레임 읽기 실패", "WARN")
                 continue
-            
+            frame_resize = cv2.resize(frame, (100,100))
+            cur_gray = cv2.cvtColor(frame_resize,cv2.COLOR_BGR2GRAY)            
             now = time.time()
             debug_counters["frame_count"] += 1
             elapsed_test = now - test_start_time
@@ -642,52 +675,79 @@ def main():
                 if not countdown_printed["3sec"] and elapsed_test >= 1:
                     print("⏱️  3초")
                     countdown_printed["3sec"] = True
-                
+
                 if not countdown_printed["2sec"] and elapsed_test >= 2:
                     print("⏱️  2초")
                     countdown_printed["2sec"] = True
-                
+
                 if not countdown_printed["1sec"] and elapsed_test >= 3:
                     print("⏱️  1초")
                     countdown_printed["1sec"] = True
-                
+
                 if not countdown_printed["move_start"] and elapsed_test >= 4:
                     print("\n🚀 사용자 움직임 시작! 지금 좌우로 움직이세요!\n")
                     test_phase = "moving"
                     countdown_printed["move_start"] = True
-            
+
             # ⭐⭐⭐ 테스트 모드 처리 ⭐⭐⭐
             if test_phase == "moving":
-                # 4초 후 정지 단계로 전환
-                if elapsed_test >= 8:  # 4초 대기 + 4초 움직임 = 8초
+                # 움직임 단계에서의 카운트다운 (4초 후부터)
+                if not countdown_printed["moving_3sec"] and elapsed_test >= 5:
+                    print("⏱️  3초")
+                    countdown_printed["moving_3sec"] = True
+
+                if not countdown_printed["moving_2sec"] and elapsed_test >= 6:
+                    print("⏱️  2초")
+                    countdown_printed["moving_2sec"] = True
+
+                if not countdown_printed["moving_1sec"] and elapsed_test >= 7:
+                    print("⏱️  1초")
+                    countdown_printed["moving_1sec"] = True
+
+                # 4초 움직임 후 정지 단계로 전환
+                if not countdown_printed["stop_start"] and elapsed_test >= 8:  # 4초 대기 + 4초 움직임 = 8초
                     print("\n⏸️  움직임 멈춤! 3초간 정지하세요!\n")
                     test_phase = "stopping"
                     test_stop_start_time = now
                     test_coordinates = []
                     test_reference_point = None
+                    countdown_printed["stop_start"] = True
             
-            # 정지 단계에서 좌표 수집
+            # 정지 단계에서 카운트다운 및 좌표 수집
             if test_phase == "stopping":
                 stop_elapsed = now - test_stop_start_time
-                
+
+                # 3초, 2초, 1초 카운트다운
+                if not countdown_printed["stop_3sec"] and stop_elapsed >= 1:
+                    print("⏱️  3초")
+                    countdown_printed["stop_3sec"] = True
+
+                if not countdown_printed["stop_2sec"] and stop_elapsed >= 2:
+                    print("⏱️  2초")
+                    countdown_printed["stop_2sec"] = True
+
+                if not countdown_printed["stop_1sec"] and stop_elapsed >= 3:
+                    print("⏱️  1초")
+                    countdown_printed["stop_1sec"] = True
+
                 # 3초 동안 좌표 저장
-                if stop_elapsed < 3.0:
+                if stop_elapsed < 4.0:
                     # 얼굴이 검출되면 좌표 저장
                     if len(face_boxes_preFrame) > 0:
                         face_boxes_preFrame.sort(key=lambda b: b[2]*b[3], reverse=True)
                         box_l_temp, box_t_temp, box_w_temp, box_h_temp = face_boxes_preFrame[0]
                         box_cx_temp = box_l_temp + box_w_temp // 2
                         box_cy_temp = box_t_temp + box_h_temp // 2
-                        
+
                         test_coordinates.append((box_cx_temp, box_cy_temp))
-                        
-                        # 첫 좌표를 기준점으로 설정
+
+                        # 카메라 중심 좌표를 기준점으로 설정
                         if test_reference_point is None:
-                            test_reference_point = (box_cx_temp, box_cy_temp)
-                            debug_log(f"기준점 설정: {test_reference_point}", "INFO", force=True)
-                
-                # 3초 경과 시 결과 계산
-                elif stop_elapsed >= 3.0:
+                            test_reference_point = (frame_w // 2, frame_h // 2)
+                            debug_log(f"기준점 설정 (카메라 중심): {test_reference_point}", "INFO", force=True)
+
+                # 4초 경과 시 결과 계산
+                elif stop_elapsed >= 4.0:
                     test_mode_active = False
                     test_phase = "done"
                     
@@ -747,7 +807,7 @@ def main():
 
             if ICR_RADIUS <= 0:
                 ICR_RADIUS = int(((((frame_w/2)**2) + ((frame_h/2)**2))**0.5) * ICR_RATIO)
-                debug_log(f"ICR 반경 설정: {ICR_RADIUS}px", "INFO")
+                # debug_log(f"ICR 반경 설정: {ICR_RADIUS}px", "INFO")
 
             frame_idx += 1
             do_detect = (frame_idx % DETECT_EVERY == 0)
@@ -768,27 +828,27 @@ def main():
             if face_found and reacquire_t0 is not None:
                 reacq = now - reacquire_t0
                 metric1_times.append(reacq)
-                debug_log(f"얼굴 재인식 완료: {reacq:.3f}초", "INFO")
+                # debug_log(f"얼굴 재인식 완료: {reacq:.3f}초", "INFO")
                 reacquire_t0 = None
             elif not face_found and reacquire_t0 is None:
                 reacquire_t0 = now
                 debug_counters["face_lost"] += 1
-                debug_log(f"얼굴 손실 (#{debug_counters['face_lost']})", "WARN")
+                # debug_log(f"얼굴 손실 (#{debug_counters['face_lost']})", "WARN")
 
             if face_found:
                 face_boxes.sort(key=lambda b: b[2]*b[3], reverse=True)
                 box_l, box_t, box_w, box_h = face_boxes[0]
-                box_cx, box_cy = box_l + box_w//2, box_t + box_h//2
+                box_cx, box_cy = box_l + round(box_w/2), round(box_t + box_h/2)
                 area = box_w*box_h
                 
                 if not ever_locked:
                     ever_locked = True
-                    debug_log(f"첫 얼굴 락온! 위치=({box_cx},{box_cy}), 크기={box_w}x{box_h}", "INFO")
+                    # debug_log(f"첫 얼굴 락온! 위치=({box_cx},{box_cy}), 크기={box_w}x{box_h}", "INFO")
 
                 if not kalman_inited:
                     kf.statePost = np.array([[box_cx],[box_cy],[0],[0]], np.float32)
                     kalman_inited = True
-                    debug_log(f"칼만 필터 초기화 완료", "INFO")
+                    # debug_log(f"칼만 필터 초기화 완료", "INFO")
                 
                 kpx, kpy = kalman_predict(kf, dt_kf)
                 kalman_correct(kf, box_cx, box_cy)
@@ -854,11 +914,116 @@ def main():
                     q.put(stop_cmd)
             elif not move_ready.is_set():
                 debug_log(f"move_ready 대기 중...", "DETAIL")
-            ##-----------------------------------------------------------------
+##-----------------------------------------------------------------
 
             # 화면 표시용 스무딩
-            disp_kf_cx = int(cx_oe.filter(use_cx, now))
-            disp_kf_cy = int(cy_oe.filter(use_cy, now))
+            #disp_kf_cx = int(cx_oe.filter(use_cx, now)) # kalman
+            #disp_kf_cy = int(cy_oe.filter(use_cy, now)) # kalmal
+            #disp_kf_cx = frame_cx# original
+            #disp_kf_cy = frame_cy# original
+
+            ##-----------------------------------------------------------------
+            ## 251025_MJ_Image의 떨림을 분석해서 Frame 처리 나눔
+            ##-----------------------------------------------------------------
+                
+            """
+            떨림의 판단은 이전 Frame, 현재 Frame간의 Feature 거리로 판단 (임의로 50px로 고정해놨음)
+                현재 문제가 Image Center 판단을 DNN box Center로 하는데 그게 DNN에서 얼굴 Box Size가 변함에 따라서도 Center가 흔들리는 현상이 있음.
+                그 흔들리는 Center위치로 Image Center를 강제로 고정하여 움직이니까 멈춰 있는 Image 에서도 떨리는 현상 발생
+                그래서 One Euro로 떨림을 완화 시켰는데 이걸 적용하면 문제가 모터가 떨려서 Image가 흔들릴때 그걸 보정하지 못함 (보정은 하는데 부드럽게 떨리니까 흔들리는게 보정 안됨)
+                그래서 Frame간에 얼굴을 제외한 배경의 떨림을 분석해서 box Center와 One euro 보정을 나누어서 적용함.
+
+            1. 떨림이 심할 경우 (모터 작동 중이거나 모터가 흔들릴때. 이경우에는 Image 전체가 떨린다)
+                - 판단 기준 : 배경의 이전/지금 Frame간 Feature의 이동 거리 전체 평균이 DEADZONE_XY//2 이상일때
+                - 알고리즘  : Box Center로 강제 지정
+                  (이렇게한 이유는 Image 전체가 움직일 경우에는 얼굴 center인 Box Center로 하는게 그나마 덜 떨려보임)
+
+            2. 떨림이 없을 경우 (가만히 있는데 얼굴의 Box만 떨릴때, 이 경우에는 배경은 안떨리고 멀쩡하기 때문에 최대한 영상처리로 인해 슬쩍 센터 맞춘다) 
+                - 판단 기준 : 배경의 이전/지금 Frame간 Feature의 이동 거리 전체 평균이 DEADZONE_XY//2 이하일때
+                - 알고리즘 : 두가지의 경우로 나뉘어 조치한다.
+                1) box center가 Image Center에서 가까이 있을 경우 
+                    - One Euro로 보정된 Center로 지정
+            """
+
+            if(comp_frame_cx is 0):                 # 보정 Frame Cetner Data가 없을 경우
+                comp_frame_cx = frame_w // 2        # 실제 Frame Center
+
+            if(comp_frame_cy is 0):                 # 보정 Frame Cetner Data가 없을 경우
+                comp_frame_cy = frame_h // 2        # 실제 Frame Center
+
+            average_dist = 0                        # 이전 Frame과 현재 Frame 배경 이동의 거리 평균
+            average_count = 0                       # average_dist를 구하기 위한 Featur Count
+            DEF_MAX_SHAKE_DISTANCE = DEADZONE_XY//2 # Image 떨림을 판단하는 기준 (DEADZONE_XY//2 로 한 이유는 이동이 DEADZONE_XY 이상으로 하면 애초에 모터가 움직이기 때문에 무조건 떨리게 되어있음)
+            DEF_MIN_FRAME_CENTER_DISTANCE = 5       # 실제 Frame의 Center와 Box의 거리 (이 거리 이하일 경우에는 Image 보정하지 않고 그대로 둬야 안떨림. 이거 이상일 경우에는 원유로로 스무스하게 보정)            
+            fix_image_center = True                 # True일 경우 강제로 Image Center 지정
+
+            if( pre_gray is None ):                 # 이전 Frame이 없으면 그냥 현재 Frame 줌 (버그날까봐 처리해둔거)
+                pre_gray = cur_gray
+
+            pre_pts = cv2.goodFeaturesToTrack(pre_gray, maxCorners=1000, qualityLevel=0.01, minDistance=7) # 이전 Frame의 Feature 좌표 추출
+            cur_pts, status, err = cv2.calcOpticalFlowPyrLK( # 이전 Frame과 현재 Frame을 비교하여 현재 Frame의 Feature 좌표 추출
+                pre_gray, cur_gray, pre_pts, None,
+                winSize=(21,21), maxLevel=3,
+                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
+            )
+            good_prev = pre_pts[status.ravel()==1] # 유효한 좌표만 추출
+            good_next = cur_pts[status.ravel()==1]
+
+            err_good = err[status.ravel()==1].ravel()
+            mask = err_good < np.percentile(err_good, 90)  # 상위 10% 큰 오차 제거
+            good_prev = good_prev[mask]
+            good_next = good_next[mask]
+
+            # --- 🔧 shape 보정 추가 ---
+            pts_old = np.squeeze(good_prev)
+            pts_new = np.squeeze(good_next)
+
+            # 이전/현재 Frame 간의 배경 Feature 이동 거리 평균 계산
+            for (x0, y0), (x1, y1) in zip(pts_old, pts_new):
+                if x1 >= box_l and x1 <= (box_l+box_w) and y1 >= box_t and y1 <= (box_t+box_h): # box 안(얼굴) Data는 무시한다.
+                    continue
+
+                old_new_dx, old_new_dy = (x1 - x0), (y1 - y0) # 배경의 거리 계산
+                average_dist = average_dist + np.sqrt(old_new_dx**2 + old_new_dy**2) # 이동 거리의 유클리디안 거리 계산
+                average_count= average_count+1 # 평균 계산을 위해 Count
+
+            if average_count > 0: 
+                average_dist = average_dist / average_count # 평균 계산
+            else:
+                fix_image_center = True # 이동한게 전혀 없으면 box center로 고정한다
+
+            if((average_dist * 5) < DEF_MAX_SHAKE_DISTANCE): # Image 떨림이 심할 경우 (모터 이동중, 모터 떨림)
+                fix_image_center = False
+            else: # Image 떨림이 없을 경우 (모터 고정하여 가만히 있는 경우)
+                fix_image_center = True  
+
+            # image가 전체 떨릴때
+            if fix_image_center is True:
+                disp_kf_cx = box_cx # 센터 고정
+                disp_kf_cy = box_cy # 센터 고정
+
+            # image가 안떨릴 때
+            else:
+
+                # Frame Center와 Box Center의 거리를 구한다
+                diff_box_cx_val = box_cx - comp_frame_cx
+                diff_box_cy_val = box_cy - comp_frame_cy
+                diff_box_dist_val = np.sqrt(diff_box_cx_val**2+diff_box_cy_val**2)
+                
+                # Frame Center와 Box Center가 가까이 있을 때
+                if( diff_box_dist_val < DEF_MIN_FRAME_CENTER_DISTANCE ):
+                    disp_kf_cx = comp_frame_cx # 영상이 움직이지 않도록 Frame Center을 준다
+                    disp_kf_cy = comp_frame_cy
+                else : # Frame Center와 Box Center가 멀리 있을때
+                    disp_kf_cx = int(cx_oe.filter(use_cx, now)) # 원유로로 Center로 은근슬쩍 가도록 만든다
+                    disp_kf_cy = int(cy_oe.filter(use_cy, now))
+                if( diff_box_dist_val < DEF_MIN_FRAME_CENTER_DISTANCE * 3):
+                    comp_frame_cx = disp_kf_cx # 그다음 Frame부터는 움직임을 최소화 하기 위해 Frame Center를 보정해준다
+                    comp_frame_cy = disp_kf_cy
+
+            pre_gray = cur_gray # 위의 작업이 끝났으면 현재 Frame을 이전 Frame으로 넘겨준다
+            
+            ##-----------------------------------------------------------------
             disp_ori_cx = box_cx
             disp_ori_cy = box_cy
 
@@ -951,7 +1116,7 @@ def main():
                     icr3_t0 = now
                     icr3_inside = 0
                     icr3_total = 0
-                    debug_log(f"ICR3 수집 시작", "INFO")
+                    # debug_log(f"ICR3 수집 시작", "INFO")
                     if len(metric3_ratios)>0:
                         matric3_text = f"[지표3] ICR3={metric3_ratios[-1]:.1f}%"
                     else:
@@ -966,7 +1131,7 @@ def main():
                         if (now - icr3_t0) >= STOP_HOLD_SEC+STOP_HOLD_START:
                             ratio = 100.0 * icr3_inside / max(1, icr3_total)
                             metric3_ratios.append(ratio)
-                            debug_log(f"ICR3 수집 완료: {ratio:.1f}%", "INFO")
+                            # debug_log(f"ICR3 수집 완료: {ratio:.1f}%", "INFO")
                             icr3_phase = "idle"
                         cv2.circle(display, (display_w//2, display_h//2), ICR_RADIUS, (255,0,0), 2)
                 else:
@@ -979,11 +1144,11 @@ def main():
                 icr3_phase = "move"
 
             # 오버레이
-            display = draw_text_kr(display, f"[FACE] offset=({gcx-display.shape[1]//2},{gcy-display.shape[0]//2})", (10, display_h-140), 25, 2)
-            if len(metric1_times)>0:
-                display = draw_text_kr(display, f"[지표1] 재인식: {metric1_times[-1]:.3f}s", (10, display_h-110), 25, 2)
-            if len(metric2_ratios)>0:
-                display = draw_text_kr(display, f"[지표2] 안정: {metric2_ratios[-1]:5.1f}%", (10, display_h-80), 25, 2)
+            #display = draw_text_kr(display, f"[FACE] offset=({gcx-display.shape[1]//2},{gcy-display.shape[0]//2})", (10, display_h-140), 25, 2)
+            #if len(metric1_times)>0:
+                #display = draw_text_kr(display, f"[지표1] 재인식: {metric1_times[-1]:.3f}s", (10, display_h-110), 25, 2)
+            #if len(metric2_ratios)>0:
+                #display = draw_text_kr(display, f"[지표2] 안정: {metric2_ratios[-1]:5.1f}%", (10, display_h-80), 25, 2)
             display = draw_text_kr(display, matric3_text, (10, display_h-50), 25, 2)
             
             # ⭐ 테스트 모드 상태 표시
@@ -999,7 +1164,7 @@ def main():
                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
                 elif test_phase == "stopping":
                     stop_elapsed = now - test_stop_start_time
-                    test_text = f"정지 테스트: {stop_elapsed:.1f}s / 3.0s (좌표 {len(test_coordinates)}개)"
+                    test_text = f"정지 테스트: {stop_elapsed:.1f}s / 4.0s (좌표 {len(test_coordinates)}개)"
                     cv2.putText(display, test_text, (display.shape[1]//2 - 300, 50),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
             
@@ -1131,7 +1296,7 @@ def main():
         print(f"\n🔧 시스템 통계:")
         print(f"  총 프레임 처리: {debug_counters['frame_count']}")
         print(f"  얼굴 검출 성공: {debug_counters['face_detected']}회")
-        print(f"  얼굴 손실: {debug_counters['face_lost']}회")
+        # print(f"  얼굴 손실: {debug_counters['face_lost']}회")
         print(f"  시리얼 전송: {serial_health['total_sent']}회")
         print(f"  시리얼 오류: {serial_health['total_errors']}회")
         if serial_health['total_sent'] > 0:
