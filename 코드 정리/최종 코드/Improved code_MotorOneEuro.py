@@ -49,7 +49,7 @@ RECORD_USE_STAB = True
 
 # ⭐ 디버깅 설정
 DEBUG_MODE = True  # False로 변경하면 디버깅 끄기
-DEBUG_DETAIL = True  # True로 변경하면 상세 디버깅 (매 프레임)
+DEBUG_DETAIL = False  # True로 변경하면 상세 디버깅 (매 프레임)
 DEBUG_SERIAL_TEST = False  # True로 변경하면 시리얼 테스트 모드
 
 # 시리얼 포트 설정 (사용자 환경에 맞게 수정)
@@ -80,7 +80,7 @@ DEADZONE_AREA = 12000
 move_ready = threading.Event()
 move_ready.set()
 motor_freeze_time = {"x": 0, "y": 0, "z": 0}
-FREEZE_DURATION_S = 0.6
+FREEZE_DURATION_S = 0.2 # 모터 프리즈 지속시간
 
 # 중앙고정 & 줌
 RATIO_TRANSLATE = 0.3 # 최대 이동 비율, 디지털 짐벌
@@ -104,7 +104,8 @@ icr3_center = None
 icr3_t0 = 0.0
 icr3_inside = 0
 icr3_total = 0
-ICR_RATIO = 0.03 # 지표3의 원 반경 화면 대각선 * 3% 
+ICR_RATIO = 0.03 # 지표3의 원 반경 화면 대각선 * 3%
+CIRCLE_RADIUS_RATIO = 0.02  # 원의 반지름 비율 (화면 가로 기준)
 ICR_RADIUS = 0.0
 metric3_ratios = []
 matric3_text = ""
@@ -965,8 +966,9 @@ def main():
                         test_phase = "done"
 
                         if test_reference_point and len(test_coordinates) > 0:
-                            # ⭐ 화면 대각선의 3%를 반지름으로 설정
-                            TEST_CIRCLE_RADIUS = int(((((frame_w/2)**2) + ((frame_h/2)**2))**0.5) * 0.03)
+                            # ⭐ 화면 가로 기준 비율로 반지름 설정
+                            TEST_CIRCLE_RADIUS = int(frame_w * CIRCLE_RADIUS_RATIO)
+                            print(f"📏 원의 반지름: {TEST_CIRCLE_RADIUS}px (화면 가로의 {CIRCLE_RADIUS_RATIO*100}%, 지름 {TEST_CIRCLE_RADIUS*2}px)")
 
                             inside_count = 0
                             total_count = len(test_coordinates)
@@ -983,7 +985,7 @@ def main():
                             print("📊 평가지표 3 - 추적 안정성 테스트 결과")
                             print("=" * 70)
                             print(f"🎯 기준점: {test_reference_point}")
-                            print(f"📏 원의 반지름: {TEST_CIRCLE_RADIUS}px (화면 대각선의 3%, 지름 {TEST_CIRCLE_RADIUS*2}px)")
+                            print(f"📏 원의 반지름: {TEST_CIRCLE_RADIUS}px (화면 가로의 {CIRCLE_RADIUS_RATIO*100}%, 지름 {TEST_CIRCLE_RADIUS*2}px)")
                             print(f"📍 수집된 좌표 개수: {total_count}개")
                             print(f"✅ 원 내부 좌표: {inside_count}개")
                             print(f"❌ 원 외부 좌표: {total_count - inside_count}개")
@@ -1023,8 +1025,8 @@ def main():
             #frame_cy = frame_w//2
 
             if ICR_RADIUS <= 0:
-                ICR_RADIUS = int(((((frame_w/2)**2) + ((frame_h/2)**2))**0.5) * ICR_RATIO)
-                debug_log(f"ICR 반경 설정: {ICR_RADIUS}px", "INFO")
+                ICR_RADIUS = int(frame_w * CIRCLE_RADIUS_RATIO)
+                debug_log(f"ICR 반경 설정: {ICR_RADIUS}px (화면 가로의 {CIRCLE_RADIUS_RATIO*100}%)", "INFO")
 
             frame_idx += 1
             do_detect = (frame_idx % DETECT_EVERY == 0)
@@ -1313,8 +1315,8 @@ def main():
 
             # ⭐⭐⭐ 테스트 모드 중일 때 원 표시
             if test_phase == "stopping" and test_reference_point:
-                # 화면 대각선의 3% 반지름으로 원 그리기
-                TEST_CIRCLE_RADIUS = int(((((frame_w/2)**2) + ((frame_h/2)**2))**0.5) * 0.03)
+                # 화면 가로 기준 비율로 원 그리기
+                TEST_CIRCLE_RADIUS = int(frame_w * CIRCLE_RADIUS_RATIO)
                 cv2.circle(display, (display_w//2, display_h//2), TEST_CIRCLE_RADIUS, (255, 0, 0), 2)
 
             # 지표 계산
