@@ -138,6 +138,8 @@ test2_start_time = 0
 test2_move_start_time = 0
 test2_distances = []  # 이동량 기록
 test2_coordinates = []  # 좌표 기록 (gcx, gcy)
+test2_prev_cx = None  # 이전 프레임 x 좌표 (테스트용)
+test2_prev_cy = None  # 이전 프레임 y 좌표 (테스트용)
 test2_countdown_printed = {}
 
 # ⭐ 평가지표 1 변수 (dh1_code.py 방식)
@@ -691,7 +693,7 @@ def main():
     global test_mode_active, test_phase, test_start_time, test_stop_start_time
     global test_coordinates, test_reference_point
     global test2_mode_active, test2_phase, test2_start_time, test2_move_start_time
-    global test2_distances, test2_coordinates, test2_countdown_printed
+    global test2_distances, test2_coordinates, test2_prev_cx, test2_prev_cy, test2_countdown_printed
     global tracking_test_mode, tracking_enabled, test_duration
 
     print("\n" + "=" * 70)
@@ -951,10 +953,14 @@ def main():
                             # 좌표 기록
                             test2_coordinates.append((gcx, gcy))
 
-                            # 이전 프레임과의 거리 계산 (화면 좌표 기준)
-                            if _prev_cx is not None:
-                                dist = ((gcx - _prev_cx)**2 + (gcy - _prev_cy)**2) ** 0.5
+                            # 이전 프레임과의 거리 계산 (테스트용 이전 좌표 사용)
+                            if test2_prev_cx is not None:
+                                dist = ((gcx - test2_prev_cx)**2 + (gcy - test2_prev_cy)**2) ** 0.5
                                 test2_distances.append(dist)
+
+                            # 테스트용 이전 좌표 업데이트
+                            test2_prev_cx = gcx
+                            test2_prev_cy = gcy
 
                     elif move_elapsed >= 3.0:
                         test2_mode_active = False
@@ -1673,6 +1679,8 @@ def main():
                     test2_move_start_time = 0
                     test2_distances = []
                     test2_coordinates = []  # 좌표 기록 초기화
+                    test2_prev_cx = None  # 이전 좌표 초기화
+                    test2_prev_cy = None
                     debug_log("평가지표 2 테스트 시작", "INFO", force=True)
                 else:
                     print("\n⚠️  테스트가 이미 진행 중입니다. 완료될 때까지 기다려주세요.\n")
