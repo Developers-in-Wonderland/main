@@ -137,6 +137,7 @@ test2_phase = "idle"
 test2_start_time = 0
 test2_move_start_time = 0
 test2_distances = []  # 이동량 기록
+test2_coordinates = []  # 좌표 기록 (gcx, gcy)
 test2_countdown_printed = {}
 
 # ⭐ 평가지표 1 변수 (dh1_code.py 방식)
@@ -690,7 +691,7 @@ def main():
     global test_mode_active, test_phase, test_start_time, test_stop_start_time
     global test_coordinates, test_reference_point
     global test2_mode_active, test2_phase, test2_start_time, test2_move_start_time
-    global test2_distances, test2_countdown_printed
+    global test2_distances, test2_coordinates, test2_countdown_printed
     global tracking_test_mode, tracking_enabled, test_duration
 
     print("\n" + "=" * 70)
@@ -946,10 +947,14 @@ def main():
 
                     if move_elapsed < 3.0:  # 3초간 이동량 수집
                         # ⭐ 화면에 표시되는 좌표(gcx, gcy)를 사용하여 측정
-                        if face_found and _prev_cx is not None:
+                        if face_found:
+                            # 좌표 기록
+                            test2_coordinates.append((gcx, gcy))
+
                             # 이전 프레임과의 거리 계산 (화면 좌표 기준)
-                            dist = ((gcx - _prev_cx)**2 + (gcy - _prev_cy)**2) ** 0.5
-                            test2_distances.append(dist)
+                            if _prev_cx is not None:
+                                dist = ((gcx - _prev_cx)**2 + (gcy - _prev_cy)**2) ** 0.5
+                                test2_distances.append(dist)
 
                     elif move_elapsed >= 3.0:
                         test2_mode_active = False
@@ -960,11 +965,17 @@ def main():
                             total_count = len(test2_distances)
                             ratio = (stable_count / total_count * 100) if total_count > 0 else 0
 
+                            # 통계 계산
+                            min_dist = min(test2_distances)
+                            max_dist = max(test2_distances)
+                            avg_dist = sum(test2_distances) / len(test2_distances)
+
                             print("=" * 70)
                             print("📊 평가지표 2 - 이동량 안정성 테스트 결과")
                             print("=" * 70)
                             print(f"📍 수집된 프레임 개수: {total_count}개")
                             print(f"📏 임계값: {DT_THRESH_PX}px")
+                            print(f"📐 이동량 통계: 최소={min_dist:.2f}px, 평균={avg_dist:.2f}px, 최대={max_dist:.2f}px")
                             print(f"✅ 임계값 이하 프레임: {stable_count}개")
                             print(f"❌ 임계값 초과 프레임: {total_count - stable_count}개")
                             print(f"📈 안정성 비율: {ratio:.2f}%")
@@ -979,6 +990,21 @@ def main():
                                 print("🟡 보통: 추적 성능 개선 필요 (60~70%)")
                             else:
                                 print("🔴 불량: 추적 안정성이 낮음 (60% 미만)")
+
+                            # ⭐ 수집된 좌표 출력
+                            print("\n" + "=" * 70)
+                            print("📍 수집된 좌표 목록 (gcx, gcy)")
+                            print("=" * 70)
+                            for idx, (cx, cy) in enumerate(test2_coordinates, 1):
+                                # 이동량도 함께 출력 (첫 번째 좌표는 이동량 없음)
+                                if idx == 1:
+                                    print(f"{idx:3d}. ({cx:4.0f}, {cy:4.0f})")
+                                else:
+                                    prev_cx, prev_cy = test2_coordinates[idx-2]
+                                    dist = ((cx - prev_cx)**2 + (cy - prev_cy)**2) ** 0.5
+                                    status = "✅" if dist <= DT_THRESH_PX else "❌"
+                                    print(f"{idx:3d}. ({cx:4.0f}, {cy:4.0f}) - 이동량: {dist:6.2f}px {status}")
+                            print("=" * 70)
 
                             print("\n정상 모드로 전환합니다...")
                             print("💡 'p' 키를 눌러 다시 테스트할 수 있습니다.\n")
@@ -1646,6 +1672,7 @@ def main():
                     test2_phase = "waiting"
                     test2_move_start_time = 0
                     test2_distances = []
+                    test2_coordinates = []  # 좌표 기록 초기화
                     debug_log("평가지표 2 테스트 시작", "INFO", force=True)
                 else:
                     print("\n⚠️  테스트가 이미 진행 중입니다. 완료될 때까지 기다려주세요.\n")
