@@ -1000,8 +1000,8 @@ def main():
                                 if idx == 1:
                                     print(f"{idx:3d}. ({cx:4.0f}, {cy:4.0f})")
                                 else:
-                                    prev_cx, prev_cy = test2_coordinates[idx-2]
-                                    dist = ((cx - prev_cx)**2 + (cy - prev_cy)**2) ** 0.5
+                                    # 실제 측정된 이동량 사용 (test2_distances는 좌표보다 1개 적음)
+                                    dist = test2_distances[idx-2]  # idx-2: 좌표 인덱스와 맞춤
                                     status = "✅" if dist <= DT_THRESH_PX else "❌"
                                     print(f"{idx:3d}. ({cx:4.0f}, {cy:4.0f}) - 이동량: {dist:6.2f}px {status}")
                             print("=" * 70)
