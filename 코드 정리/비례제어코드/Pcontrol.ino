@@ -53,7 +53,7 @@ char inputBuffer[INPUT_BUFFER_SIZE];
 
 // ---------------------- STATE ----------------------
 int motor_vals[AXIS_COUNT + 1] = {0};           // d0..d5 + delay
-int curr_degree[AXIS_COUNT]    = {80, 45, 90, 100, 90, 140};
+int curr_degree[AXIS_COUNT]    = {90, 30, 90, 90, 90, 140};
 int curr_pulse[AXIS_COUNT]     = {0, 0, 0, 0, 0, 0};
 
 // Non-blocking delay state
