@@ -273,14 +273,14 @@ def compute_motor_angles_safe(center_x, center_y, area, frame_shape):
     ddz_raw = np.clip(ddz_raw, -2, 2)
 
     # ⭐⭐⭐ 누적 시스템 초기화 (디버깅 정보 추가)
+    # ⭐⭐⭐ 누적 시스템 초기화
     if not hasattr(compute_motor_angles_safe, 'accumulator'):
         compute_motor_angles_safe.accumulator = {
             'ddx': 0.0,
             'ddy': 0.0,
             'ddz': 0.0,
-            'last_send_time': time.time(),
+            'last_send_time': 0.0,  # ⭐ 0.0으로 시작 (첫 호출 시 즉시 전송)
             'sample_count': 0,
-            # 디버깅용
             'total_sends': 0,
             'max_samples': 0,
             'min_samples': 999,
@@ -288,32 +288,20 @@ def compute_motor_angles_safe(center_x, center_y, area, frame_shape):
         debug_log("✅ 누적 시스템 초기화 완료", "INFO", force=True)
     
     acc = compute_motor_angles_safe.accumulator
+    current_time = time.time()
     
-    # ⭐⭐⭐ 명령 누적 (디버깅 정보 추가)
+    # ⭐ 누적 (항상 실행)
     acc['ddx'] += ddx_raw
     acc['ddy'] += ddy_raw
     acc['ddz'] += ddz_raw
     acc['sample_count'] += 1
     
-    # 🔍 디버깅: 누적 중 (5프레임마다 출력)
-    if acc['sample_count'] % 5 == 0:
-        debug_log(f"[누적중] 샘플={acc['sample_count']}개, "
-                  f"누적값=({acc['ddx']:+.2f},{acc['ddy']:+.2f}), "
-                  f"현재=({ddx_raw:+.2f},{ddy_raw:+.2f}), "
-                  f"오차=({dx:+.0f},{dy:+.0f})px", "DETAIL")
+    # ⭐⭐⭐ 시간 체크 (수정됨)
+    SEND_INTERVAL = 0.15
     
-    # ⭐⭐⭐ 일정 시간마다 한 번만 전송
-    SEND_INTERVAL = 0.15  # 150ms (조정 가능)
-    current_time = time.time()
-    time_elapsed = current_time - acc['last_send_time']
-    
-    # 🔍 디버깅: 남은 시간 (매 프레임)
-    time_remaining = max(0, SEND_INTERVAL - time_elapsed)
-    if DEBUG_DETAIL and acc['sample_count'] % 3 == 0:
-        debug_log(f"[대기중] 남은시간={time_remaining*1000:.0f}ms, 샘플={acc['sample_count']}개", "DETAIL")
-    
-    if time_elapsed >= SEND_INTERVAL:
-        # ⭐ 샘플이 없으면 전송 안 함 (안전장치)
+    # ⭐ 첫 호출이거나 충분한 시간이 지났을 때
+    if acc['last_send_time'] == 0.0 or (current_time - acc['last_send_time']) >= SEND_INTERVAL:
+        
         if acc['sample_count'] == 0:
             debug_log("⚠️  [경고] 샘플 0개, 전송 건너뜀", "WARN")
             acc['last_send_time'] = current_time
@@ -335,17 +323,20 @@ def compute_motor_angles_safe(center_x, center_y, area, frame_shape):
             delay = 200
             speed_category = "느림"
         
-        # 🔍 디버깅: 통계 업데이트
+        # 통계 업데이트
         acc['total_sends'] += 1
         acc['max_samples'] = max(acc['max_samples'], acc['sample_count'])
         acc['min_samples'] = min(acc['min_samples'], acc['sample_count'])
         
-        # 🔍 디버깅: 전송 정보 (항상 출력)
+        # ⭐ 실제 경과 시간 계산
+        actual_interval = current_time - acc['last_send_time'] if acc['last_send_time'] > 0 else 0
+        
+        # 디버깅 출력
         debug_log("", "INFO", force=True)
         debug_log("=" * 70, "INFO", force=True)
         debug_log(f"🚀 [전송 #{acc['total_sends']}] 누적 완료 → 시리얼 전송", "INFO", force=True)
         debug_log("=" * 70, "INFO", force=True)
-        debug_log(f"⏱️  누적 시간: {time_elapsed*1000:.1f}ms (목표: {SEND_INTERVAL*1000:.0f}ms)", "INFO", force=True)
+        debug_log(f"⏱️  누적 시간: {actual_interval*1000:.1f}ms (목표: {SEND_INTERVAL*1000:.0f}ms)", "INFO", force=True)
         debug_log(f"📊 샘플 개수: {acc['sample_count']}개", "INFO", force=True)
         debug_log(f"📍 거리: {distance:.0f}px → 속도: {speed_category} (delay={delay}ms)", "INFO", force=True)
         debug_log(f"", "INFO", force=True)
@@ -362,12 +353,12 @@ def compute_motor_angles_safe(center_x, center_y, area, frame_shape):
         debug_log("=" * 70, "INFO", force=True)
         debug_log("", "INFO", force=True)
         
-        # 초기화
+        # ⭐⭐⭐ 초기화 (중요: 시간을 정확히 기록!)
         acc['ddx'] = 0.0
         acc['ddy'] = 0.0
         acc['ddz'] = 0.0
         acc['sample_count'] = 0
-        acc['last_send_time'] = current_time
+        acc['last_send_time'] = current_time  # ⭐ 현재 시간 기록
         
         return {
             "motor_1": -avg_ddx,
@@ -379,11 +370,7 @@ def compute_motor_angles_safe(center_x, center_y, area, frame_shape):
             "motor_7": delay
         }
     else:
-        # 🔍 디버깅: 아직 시간 안됨
-        if DEBUG_DETAIL and acc['sample_count'] == 1:
-            debug_log(f"⏳ [누적시작] 새로운 사이클 시작, 목표={SEND_INTERVAL*1000:.0f}ms", "DETAIL")
-        
-        # 아직 시간 안됨 → None 반환 (전송 안 함)
+        # 아직 시간 안됨
         return None
 
 
