@@ -1111,7 +1111,7 @@ def main():
             # 평가지표 3 모드나 일반 모드에서는 항상 추적
             should_track = (not tracking_test_mode) or tracking_enabled
 
-            if face_found and move_ready.is_set() and should_track:
+            if face_found and should_track:
                 debug_log(f"로봇팔 제어 시작", "DETAIL")
 
                 # 모터 제어용 필터 적용 (DNN 박스 떨림 제거)
