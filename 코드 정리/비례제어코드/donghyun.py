@@ -244,11 +244,11 @@ def compute_motor_angles_safe(center_x, center_y, area, frame_shape):
     # 거리 계산
     distance = np.sqrt(dx**2 + dy**2)
 
-    # 비례 제어 게인 (원래대로 복구)
+    # 비례 제어 게인
     Kp_xy = 0.02
     Kp_z = 0.00003
 
-    # Soft Deadzone (부드러운 전환)
+    # Soft Deadzone
     def soft_deadzone(error, deadzone):
         """Deadzone 경계에서 부드럽게 감쇠"""
         abs_error = abs(error)
@@ -272,29 +272,53 @@ def compute_motor_angles_safe(center_x, center_y, area, frame_shape):
     ddy_raw = np.clip(ddy_raw, -5, 5)
     ddz_raw = np.clip(ddz_raw, -2, 2)
 
-    # ⭐ 누적 시스템 초기화
+    # ⭐⭐⭐ 누적 시스템 초기화 (디버깅 정보 추가)
     if not hasattr(compute_motor_angles_safe, 'accumulator'):
         compute_motor_angles_safe.accumulator = {
             'ddx': 0.0,
             'ddy': 0.0,
             'ddz': 0.0,
             'last_send_time': time.time(),
-            'sample_count': 0
+            'sample_count': 0,
+            # 디버깅용
+            'total_sends': 0,
+            'max_samples': 0,
+            'min_samples': 999,
         }
+        debug_log("✅ 누적 시스템 초기화 완료", "INFO", force=True)
     
     acc = compute_motor_angles_safe.accumulator
     
-    # ⭐ 명령 누적 (평균 계산용)
+    # ⭐⭐⭐ 명령 누적 (디버깅 정보 추가)
     acc['ddx'] += ddx_raw
     acc['ddy'] += ddy_raw
     acc['ddz'] += ddz_raw
     acc['sample_count'] += 1
     
-    # ⭐ 일정 시간마다 한 번만 전송
-    SEND_INTERVAL = 0.15  # 150ms (0.1~0.2초 사이로 조절 가능)
-    current_time = time.time()
+    # 🔍 디버깅: 누적 중 (5프레임마다 출력)
+    if acc['sample_count'] % 5 == 0:
+        debug_log(f"[누적중] 샘플={acc['sample_count']}개, "
+                  f"누적값=({acc['ddx']:+.2f},{acc['ddy']:+.2f}), "
+                  f"현재=({ddx_raw:+.2f},{ddy_raw:+.2f}), "
+                  f"오차=({dx:+.0f},{dy:+.0f})px", "DETAIL")
     
-    if (current_time - acc['last_send_time']) >= SEND_INTERVAL:
+    # ⭐⭐⭐ 일정 시간마다 한 번만 전송
+    SEND_INTERVAL = 0.15  # 150ms (조정 가능)
+    current_time = time.time()
+    time_elapsed = current_time - acc['last_send_time']
+    
+    # 🔍 디버깅: 남은 시간 (매 프레임)
+    time_remaining = max(0, SEND_INTERVAL - time_elapsed)
+    if DEBUG_DETAIL and acc['sample_count'] % 3 == 0:
+        debug_log(f"[대기중] 남은시간={time_remaining*1000:.0f}ms, 샘플={acc['sample_count']}개", "DETAIL")
+    
+    if time_elapsed >= SEND_INTERVAL:
+        # ⭐ 샘플이 없으면 전송 안 함 (안전장치)
+        if acc['sample_count'] == 0:
+            debug_log("⚠️  [경고] 샘플 0개, 전송 건너뜀", "WARN")
+            acc['last_send_time'] = current_time
+            return None
+        
         # 평균 계산
         avg_ddx = acc['ddx'] / acc['sample_count']
         avg_ddy = acc['ddy'] / acc['sample_count']
@@ -302,14 +326,41 @@ def compute_motor_angles_safe(center_x, center_y, area, frame_shape):
         
         # 거리 기반 delay
         if distance > 150:
-            delay = 100  # 큰 움직임: 빠르게
+            delay = 100
+            speed_category = "빠름"
         elif distance > 80:
-            delay = 150  # 중간
+            delay = 150
+            speed_category = "중간"
         else:
-            delay = 200  # 미세 조정: 천천히
+            delay = 200
+            speed_category = "느림"
         
-        debug_log(f"[누적전송] 거리={distance:.0f}px, 샘플={acc['sample_count']}개, "
-                  f"평균=({avg_ddx:+.2f},{avg_ddy:+.2f}), delay={delay}ms", "INFO")
+        # 🔍 디버깅: 통계 업데이트
+        acc['total_sends'] += 1
+        acc['max_samples'] = max(acc['max_samples'], acc['sample_count'])
+        acc['min_samples'] = min(acc['min_samples'], acc['sample_count'])
+        
+        # 🔍 디버깅: 전송 정보 (항상 출력)
+        debug_log("", "INFO", force=True)
+        debug_log("=" * 70, "INFO", force=True)
+        debug_log(f"🚀 [전송 #{acc['total_sends']}] 누적 완료 → 시리얼 전송", "INFO", force=True)
+        debug_log("=" * 70, "INFO", force=True)
+        debug_log(f"⏱️  누적 시간: {time_elapsed*1000:.1f}ms (목표: {SEND_INTERVAL*1000:.0f}ms)", "INFO", force=True)
+        debug_log(f"📊 샘플 개수: {acc['sample_count']}개", "INFO", force=True)
+        debug_log(f"📍 거리: {distance:.0f}px → 속도: {speed_category} (delay={delay}ms)", "INFO", force=True)
+        debug_log(f"", "INFO", force=True)
+        debug_log(f"📈 누적값:", "INFO", force=True)
+        debug_log(f"   X축: {acc['ddx']:+.2f}° (샘플 합계)", "INFO", force=True)
+        debug_log(f"   Y축: {acc['ddy']:+.2f}° (샘플 합계)", "INFO", force=True)
+        debug_log(f"", "INFO", force=True)
+        debug_log(f"📉 평균값 (실제 전송):", "INFO", force=True)
+        debug_log(f"   X축: {avg_ddx:+.2f}° (평균)", "INFO", force=True)
+        debug_log(f"   Y축: {avg_ddy:+.2f}° (평균)", "INFO", force=True)
+        debug_log(f"   Z축: {avg_ddz:+.2f}° (평균)", "INFO", force=True)
+        debug_log(f"", "INFO", force=True)
+        debug_log(f"🎯 명령: motor_1={-avg_ddx:+.2f}, motor_3={-avg_ddy:+.2f}, delay={delay}ms", "INFO", force=True)
+        debug_log("=" * 70, "INFO", force=True)
+        debug_log("", "INFO", force=True)
         
         # 초기화
         acc['ddx'] = 0.0
@@ -328,6 +379,10 @@ def compute_motor_angles_safe(center_x, center_y, area, frame_shape):
             "motor_7": delay
         }
     else:
+        # 🔍 디버깅: 아직 시간 안됨
+        if DEBUG_DETAIL and acc['sample_count'] == 1:
+            debug_log(f"⏳ [누적시작] 새로운 사이클 시작, 목표={SEND_INTERVAL*1000:.0f}ms", "DETAIL")
+        
         # 아직 시간 안됨 → None 반환 (전송 안 함)
         return None
 
@@ -1033,7 +1088,7 @@ def main():
 
             if ICR_RADIUS <= 0:
                 ICR_RADIUS = int(frame_w * CIRCLE_RADIUS_RATIO)
-                debug_log(f"ICR 반경 설정: {ICR_RADIUS}px (화면 가로의 {CIRCLE_RADIUS_RATIO*100}%)", "INFO")
+                # debug_log(f"ICR 반경 설정: {ICR_RADIUS}px (화면 가로의 {CIRCLE_RADIUS_RATIO*100}%)", "INFO")
 
             frame_idx += 1
             do_detect = (frame_idx % DETECT_EVERY == 0)
@@ -1070,12 +1125,12 @@ def main():
                 
                 if not ever_locked:
                     ever_locked = True
-                    debug_log(f"첫 얼굴 락온! 위치=({box_cx},{box_cy}), 크기={box_w}x{box_h}", "INFO")
+                    # debug_log(f"첫 얼굴 락온! 위치=({box_cx},{box_cy}), 크기={box_w}x{box_h}", "INFO")
 
                 if not kalman_inited:
                     kf.statePost = np.array([[box_cx],[box_cy],[0],[0]], np.float32)
                     kalman_inited = True
-                    debug_log(f"칼만 필터 초기화 완료", "INFO")
+                    # debug_log(f"칼만 필터 초기화 완료", "INFO")
                 
                 kpx, kpy = kalman_predict(kf, dt_kf)
                 kalman_correct(kf, box_cx, box_cy)
@@ -1096,28 +1151,59 @@ def main():
             ##-----------------------------------------------------------------
             should_track = (not tracking_test_mode) or tracking_enabled
 
+            # 메인 루프의 모터 제어 부분 (기존 코드 대체)
             if face_found and should_track:
                 debug_log(f"로봇팔 제어 시작", "DETAIL")
 
                 # 모터 제어용 필터 적용
                 filtered_motor_cx = int(motor_cx_oe.filter(box_cx, now))
                 filtered_motor_cy = int(motor_cy_oe.filter(box_cy, now))
+                
+                # 🔍 디버깅: 필터 효과
+                filter_diff_x = abs(box_cx - filtered_motor_cx)
+                filter_diff_y = abs(box_cy - filtered_motor_cy)
+                if filter_diff_x > 10 or filter_diff_y > 10:
+                    debug_log(f"[필터] 원본=({box_cx},{box_cy}), 필터=({filtered_motor_cx},{filtered_motor_cy}), "
+                            f"차이=({filter_diff_x},{filter_diff_y})px", "DETAIL")
 
                 angles = compute_motor_angles_safe(filtered_motor_cx, filtered_motor_cy, area, frame.shape)
                 
                 # ⭐ None이 아닐 때만 전송 (누적 완료된 경우)
                 if angles is not None:
                     clipped_angles = clip_motor_angles(angles)
+                    
+                    # 🔍 디버깅: 클리핑 여부
+                    clipped = False
+                    for k in ['motor_1', 'motor_3', 'motor_5']:
+                        if abs(angles[k]) != abs(clipped_angles[k]):
+                            clipped = True
+                            debug_log(f"⚠️  [클리핑] {k}: {angles[k]:.2f} → {clipped_angles[k]:.2f}", "WARN")
+                    
                     if not q.full():
                         q.put(clipped_angles)
-                        debug_log(f"명령 전송 완료!", "INFO")
-                    
+                        debug_log(f"✅ 명령 큐 추가 완료! (큐 크기: {q.qsize()})", "INFO", force=True)
+                    else:
+                        debug_log(f"❌ 큐 가득 참! 명령 손실됨", "ERROR", force=True)
+                else:
+                    # 🔍 디버깅: 누적 중
+                    if hasattr(compute_motor_angles_safe, 'accumulator'):
+                        acc = compute_motor_angles_safe.accumulator
+                        print(f"\n📊 [누적 전송 시스템 통계]")
+                        print(f"  총 전송 횟수: {acc['total_sends']}회")
+                        print(f"  최대 샘플 수: {acc['max_samples']}개/전송")
+                        print(f"  최소 샘플 수: {acc['min_samples']}개/전송")
+                        if acc['total_sends'] > 0:
+                            avg_samples = debug_counters['frame_count'] / acc['total_sends']
+                            print(f"  평균 샘플 수: {avg_samples:.1f}개/전송")
+                            print(f"  실제 전송 주기: {1000/acc['total_sends']:.1f}ms")
+                            
             elif not face_found and ever_locked:
                 debug_log(f"얼굴 없음 - 정지 명령", "DETAIL")
                 stop_cmd = {f"motor_{i}": 0 for i in range(1, 7)}
                 stop_cmd["motor_7"] = 50
                 if not q.full():
                     q.put(stop_cmd)
+                    debug_log(f"⏹️  정지 명령 전송", "INFO")
             ##-----------------------------------------------------------------
 
             # 화면 표시용 스무딩
