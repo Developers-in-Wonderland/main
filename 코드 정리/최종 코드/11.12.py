@@ -1577,4 +1577,317 @@ def main():
                     cd_text = "cheese~!" if t_rem <= 0.4 else ""
                 
                 if cd_text:
-                    display = draw_text_kr(disp
+                    display = draw_text_kr(display, cd_text, (10, 120), 42, 3)
+                remain = max(0, photo_count - photo_taken)
+
+                if now >= next_shot_at:
+                    filename = get_new_image_filename()
+                    cv2.imwrite(filename, frame)
+                    photo_taken += 1
+                    debug_log(f"사진 저장 #{photo_taken}/{photo_count}: {os.path.basename(filename)}", "INFO")
+
+                    if photo_taken >= photo_count:
+                        photo_shooting = False
+                        next_shot_at = None
+                        msg_lt_text, msg_lt_until = f"연속 사진 촬영 완료", now + 1.0
+                        debug_log(f"연속 촬영 완료", "INFO")
+                    else:
+                        next_shot_at = now + photo_interval
+                display = draw_text_kr(display, f"남은 장: {remain}", (display.shape[1]-220, 60), 28, 2)
+
+            cv2.imshow("Face Tracking Robot - Method A (Debug Mode)", display)
+
+            # 키 입력
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                debug_log("종료 키 입력됨", "INFO", force=True)
+                break
+
+            # ⭐⭐⭐ 'i' 키: 평가지표 1 테스트 시작 ⭐⭐⭐
+            if key == ord('i'):
+                if not tracking_test_mode and not test_mode_active:
+                    try:
+                        print("\n" + "=" * 70)
+                        user_input = input("테스트 시간을 입력하세요 (0.1~2.0초, 기본값=1.5): ").strip()
+
+                        if user_input == "":
+                            duration = 1.5
+                        else:
+                            duration = float(user_input)
+                            if duration <= 0 or duration > 2.0:
+                                print("⚠️  입력값은 0.1~2.0초 사이여야 합니다. 기본값 1.5초로 설정합니다.")
+                                duration = 1.5
+
+                        print("=" * 70)
+                        print(f"🧪 평가지표 1 - 추적 성능 테스트 시작")
+                        print("=" * 70)
+                        print(f"⏱️  움직임 시간: {duration}초")
+                        print(f"⏱️  검출 체크: {DETECTION_TIME}초 후")
+                        print("=" * 70)
+                        print("📌 테스트 절차:")
+                        print("  1. 카메라 앞에 얼굴을 위치시켜 주세요")
+                        print("  2. 카운트다운이 시작되면 준비하세요")
+                        print("  3. '움직임 시작' 신호 후 좌우로 움직이세요")
+                        print(f"  4. {DETECTION_TIME}초 후 로봇팔이 따라왔는지 확인합니다")
+                        print("=" * 70)
+                        print()
+
+                        test1_vars = reset_test_mode(duration)
+                        debug_log(f"평가지표 1 테스트 시작 (움직임: {duration}초, 검출: {DETECTION_TIME}초)", "INFO", force=True)
+
+                    except ValueError:
+                        print("⚠️  입력값이 유효하지 않습니다. 기본값 1.5초로 설정합니다.\n")
+                        duration = 1.5
+                        test1_vars = reset_test_mode(duration)
+                    except Exception as e:
+                        print(f"⚠️  오류 발생: {e}. 기본값 1.5초로 설정합니다.\n")
+                        duration = 1.5
+                        test1_vars = reset_test_mode(duration)
+                else:
+                    print("\n⚠️  테스트가 이미 진행 중입니다. 완료될 때까지 기다려주세요.\n")
+
+            # ⭐⭐⭐ 'p' 키: 평가지표 2 테스트 시작 ⭐⭐⭐
+            if key == ord('p'):
+                if not test2_mode_active and not test_mode_active and not tracking_test_mode:
+                    print("\n" + "=" * 70)
+                    print("🧪 평가지표 2 - 이동량 안정성 테스트 시작")
+                    print("=" * 70)
+                    print("📌 테스트 절차:")
+                    print("  1. 카운트다운 후 움직이세요 (3초)")
+                    print("  2. 이동량이 임계값 이하인 비율을 측정합니다 (3초)")
+                    print(f"  3. 목표: 안정성 비율 ≥ 80% (임계값: {DT_THRESH_PX}px)")
+                    print("=" * 70)
+                    print()
+
+                    test2_start_time = time.time()
+                    test2_countdown_printed = {}
+                    test2_mode_active = True
+                    test2_phase = "waiting"
+                    test2_move_start_time = 0
+                    test2_distances = []
+                    test2_coordinates = []  # 좌표 기록 초기화
+                    test2_prev_cx = None  # 이전 좌표 초기화
+                    test2_prev_cy = None
+                    debug_log("평가지표 2 테스트 시작", "INFO", force=True)
+                else:
+                    print("\n⚠️  테스트가 이미 진행 중입니다. 완료될 때까지 기다려주세요.\n")
+
+            # ⭐⭐⭐ 'o' 키: 평가지표 3 테스트 시작 ⭐⭐⭐
+            if key == ord('o'):
+                if not test_mode_active and not tracking_test_mode and not test2_mode_active:
+                    print("\n" + "=" * 70)
+                    print("🧪 평가지표 3 - 추적 안정성 테스트 시작")
+                    print("=" * 70)
+                    print("📌 테스트 절차:")
+                    print("  1. 카운트다운 후 좌우 또는 상하로 움직이세요 (3초)")
+                    print("  2. '움직임 멈춤' 신호 후 정지하세요 (3초)")
+                    print("  3. 추적 안정성을 측정합니다")
+                    print(f"  4. 목표: 원 내부 비율 ≥ 80% (반지름: 화면 대각선의 3%)")
+                    print("=" * 70)
+                    print()
+
+                    test_start_time = time.time()
+                    test3_countdown_printed = {}
+                    test_mode_active = True
+                    test_phase = "waiting"
+                    test_stop_start_time = 0
+                    test_coordinates = []
+                    test_reference_point = None
+                    debug_log("평가지표 3 테스트 시작", "INFO", force=True)
+                else:
+                    print("\n⚠️  테스트가 이미 진행 중입니다. 완료될 때까지 기다려주세요.\n")
+
+            if key == ord('s') and not recording and not photo_shooting:
+                output_path = get_new_filename()
+                debug_log(f"녹화 시작 시도: {os.path.basename(output_path)}", "INFO")
+                record_w = out_frame.shape[1] if RECORD_USE_STAB else frame_w
+                record_h = out_frame.shape[0] if RECORD_USE_STAB else frame_h
+                out = cv2.VideoWriter(output_path, fourcc, frame_per_sec, (record_w, record_h))
+                if not out.isOpened():
+                    msg_lt_text, msg_lt_until = f"VideoWriter 열기 실패", now + 1.0
+                    debug_log("VideoWriter 열기 실패", "ERROR")
+                    out = None
+                else:
+                    recording = True
+                    msg_lt_text, msg_lt_until = f"녹화 시작: {os.path.basename(output_path)}", now + 1.0
+                    msg_lt_display = True
+                    debug_log(f"녹화 시작: {record_w}x{record_h} @ {frame_per_sec}fps", "INFO")
+
+            if key == ord('e') and recording:
+                recording = False
+                if out is not None:
+                    out.release()
+                    out = None
+                debug_log("녹화 종료", "INFO")
+                msg_lt_text, msg_lt_until = "녹화 종료!", now + 1.0
+                msg_lt_display = True
+            
+            # main() 키 입력 처리부에 추가
+            if key == ord('h'):
+                SHOW_OVERLAY = not SHOW_OVERLAY
+                debug_log(f"SHOW_OVERLAY = {SHOW_OVERLAY}", "INFO", force=True)
+    
+
+            # 녹화 프레임 쓰기
+            if recording and out is not None:
+                clean = out_frame if RECORD_USE_STAB else frame
+                out.write(clean)
+
+            # 연속촬영 시작 (1~9)
+            if (ord('1') <= key <= ord('9')) and not photo_shooting:
+                photo_count = key - ord('0')
+                photo_taken = 0
+                photo_shooting = True
+                next_shot_at = now + photo_interval
+                msg_lt_text, msg_lt_until = f"{photo_count}장 연속 촬영 시작! ({photo_interval:.0f}초 간격)", now + 500
+                debug_log(f"연속 촬영 시작: {photo_count}장, {photo_interval}초 간격", "INFO")
+            
+            pre_frame_time = now
+
+    except KeyboardInterrupt:
+        debug_log("KeyboardInterrupt 발생", "WARN", force=True)
+    except Exception as e:
+        debug_log(f"예외 발생: {e}", "ERROR", force=True)
+        import traceback
+        traceback.print_exc()
+    finally:
+        debug_log("리소스 정리 시작...", "INFO", force=True)
+        try:
+            if out is not None:
+                out.release()
+                debug_log("VideoWriter 해제 완료", "INFO")
+        except Exception as e:
+            debug_log(f"VideoWriter 해제 오류: {e}", "WARN")
+        
+        cap_thread.release()
+        cv2.destroyAllWindows()
+        q.put(None)
+
+        # 지표 요약
+        print("\n" + "=" * 70)
+        print("📊 성능 지표 최종 요약")
+        print("=" * 70)
+        
+        print(f"\n🔧 시스템 통계:")
+        print(f"  총 프레임 처리: {debug_counters['frame_count']}")
+        print(f"  얼굴 검출 성공: {debug_counters['face_detected']}회")
+        print(f"  얼굴 손실: {debug_counters['face_lost']}회")
+        print(f"  시리얼 전송: {serial_health['total_sent']}회")
+        print(f"  시리얼 오류: {serial_health['total_errors']}회")
+        if serial_health['total_sent'] > 0:
+            error_rate = (serial_health['total_errors'] / serial_health['total_sent'] * 100)
+            print(f"  시리얼 오류율: {error_rate:.2f}%")
+        print(f"  모터 Freeze: {debug_counters['motor_frozen']}회")
+        
+        # ⭐ 시리얼 통신 진단
+        if serial_health['connection_lost']:
+            print(f"\n⚠️  시리얼 연결 문제 감지됨!")
+            print(f"   - USB 연결 확인")
+            print(f"   - 아두이노 상태 확인")
+            print(f"   - Baud Rate 확인: {SERIAL_BAUD}")
+        elif serial_health['total_sent'] == 0:
+            print(f"\n⚠️  시리얼 데이터 전송 없음!")
+            print(f"   - 얼굴이 검출되지 않았을 수 있음")
+            print(f"   - 카메라 위치/조명 확인")
+        elif serial_health['total_errors'] > 0:
+            error_rate = (serial_health['total_errors'] / serial_health['total_sent'] * 100)
+            if error_rate > 10:
+                print(f"\n⚠️  시리얼 오류율 높음: {error_rate:.1f}%")
+                print(f"   - USB 케이블 교체 권장")
+                print(f"   - 아두이노 처리 속도 확인")
+            else:
+                print(f"\n✅ 시리얼 통신: 정상 (오류율 {error_rate:.1f}%)")
+        else:
+            print(f"\n✅ 시리얼 통신: 완벽 (오류 없음)")
+        
+        if len(metric1_times)>0:
+            arr=np.array(metric1_times)
+            print(f"\n📊 [지표1] 재인식 시간 (샘플: {len(arr)}개)")
+            print(f"  평균: {arr.mean():.3f}s")
+            print(f"  중앙값: {np.median(arr):.3f}s")
+            print(f"  최소: {arr.min():.3f}s")
+            print(f"  최대: {arr.max():.3f}s")
+        else:
+            print(f"\n📊 [지표1] 재인식 시간: 샘플 없음")
+
+        if len(metric1_speeds_px)>0:
+            ap=np.array(metric1_speeds_px)
+            ac=np.array(metric1_speeds_cm)
+            print(f"\n📊 [지표1-속도] 추적 속도 (샘플: {len(ap)}개)")
+            print(f"  px/s - 평균: {ap.mean():.1f} | 중앙값: {np.median(ap):.1f} | 최대: {ap.max():.1f}")
+            print(f"  cm/s - 평균: {ac.mean():.1f} | 중앙값: {np.median(ac):.1f} | 최대: {ac.max():.1f}")
+        else:
+            print(f"\n📊 [지표1-속도] 샘플 없음")
+
+        if len(metric2_ratios)>0:
+            arr=np.array(metric2_ratios)
+            print(f"\n📊 [지표2] 추적 안정성 (샘플: {len(arr)}개)")
+            print(f"  평균: {arr.mean():.1f}%")
+            print(f"  중앙값: {np.median(arr):.1f}%")
+            print(f"  최소: {arr.min():.1f}%")
+            print(f"  최대: {arr.max():.1f}%")
+        else:
+            print(f"\n📊 [지표2] 추적 안정성: 샘플 없음")
+
+        if len(metric3_ratios)>0:
+            arr=np.array(metric3_ratios)
+            print(f"\n📊 [지표3] ICR3 원내 비율 (샘플: {len(arr)}개)")
+            print(f"  평균: {arr.mean():.1f}%")
+            print(f"  중앙값: {np.median(arr):.1f}%")
+            print(f"  최소: {arr.min():.1f}%")
+            print(f"  최대: {arr.max():.1f}%")
+        else:
+            print(f"\n📊 [지표3] ICR3: 샘플 없음")
+        
+        print("=" * 70)
+        print("✅ 프로그램 종료 완료")
+        print("=" * 70)
+
+if __name__ == "__main__":
+    print("\n" + "=" * 70)
+    print("🚀 프로그램 초기화")
+    print("=" * 70)
+    print(f"Python 버전: {sys.version.split()[0]}")
+    print(f"OpenCV 버전: {cv2.__version__}")
+    print(f"Numpy 버전: {np.__version__}")
+    print(f"시리얼 포트: {SERIAL_PORT} @ {SERIAL_BAUD}bps")
+    print("=" * 70)
+    
+    # ⭐ 시리얼 포트 존재 여부 확인
+    import serial.tools.list_ports
+    ports = list(serial.tools.list_ports.comports())
+    
+    if ports:
+        print("\n사용 가능한 포트:")
+        port_found = False
+        for p in ports:
+            marker = "✅" if p.device == SERIAL_PORT else "  "
+            print(f"  {marker} {p.device}: {p.description}")
+            if p.device == SERIAL_PORT:
+                port_found = True
+        
+        if not port_found:
+            print(f"\n⚠️  경고: 설정된 포트 '{SERIAL_PORT}'를 찾을 수 없습니다!")
+            print(f"   위 목록에서 올바른 포트를 선택하여 코드를 수정하세요.")
+    else:
+        print("\n❌ 사용 가능한 시리얼 포트가 없습니다!")
+        print("   아두이노가 연결되어 있는지 확인하세요.")
+    
+    print("=" * 70)
+    print()
+    
+    try:
+        main()
+    except Exception as e:
+        print("\n" + "=" * 70)
+        print("❌ 치명적 오류 발생!")
+        print("=" * 70)
+        print(f"오류 타입: {type(e).__name__}")
+        print(f"오류 메시지: {e}")
+        print("\n상세 스택:")
+        import traceback
+        traceback.print_exc()
+        print("=" * 70)
+        input("\n아무 키나 눌러 종료...")
+    finally:
+        print("\n프로그램 완전 종료")
